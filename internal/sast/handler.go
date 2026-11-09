@@ -3,6 +3,7 @@ package sast
 import (
 	"net/http"
 	"time"
+	"strconv"
 
 	"github.com/labstack/echo/v5"
 )
@@ -53,4 +54,23 @@ func (h *Handler) ListWorkers(c *echo.Context) error {
 		})
 	}
 	return c.JSON(http.StatusOK, workers)
+}
+
+func (h *Handler) GetScan(c *echo.Context) error {
+	scanID, err := strconv.ParseUint(c.Param("id"), 10, 63)
+	if err != nil || scanID == 0 {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid scan id",
+		})
+	}
+
+	scan, err := h.service.GetScan(c.Request().Context(), scanID)
+	if err != nil {
+		c.Logger().Error("get scan failed", "scan_id", scanID, "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "failed to get scan",
+		})
+	}
+
+	return c.JSON(http.StatusOK, scan)
 }

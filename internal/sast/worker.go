@@ -89,6 +89,8 @@ func (w *Worker) Run(ctx context.Context) error {
 			continue
 		}
 		log.Printf("worker=%s scan=%d completed", w.id, scanID)
+
+		
 	}
 }
 
@@ -99,7 +101,7 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	key := workerHeartbeatPrefix + w.id + ":alive"
 	_, err := w.service.queue.redis.TxPipelined(optCtx, func(pipe redis.Pipeliner) error {
 		pipe.SAdd(optCtx, workerRegistryKey, w.id)
-		pipe.Set(optCtx, key, time.Now().UTC().Format(time.RFC3339Nano), workerHeartbeatTTL)
+		pipe.Set(optCtx, key, time.Now().UTC().Add(8 * time.Hour).Format(time.RFC3339Nano), workerHeartbeatTTL)
 		return nil
 	})
 	if err != nil {

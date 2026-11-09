@@ -76,9 +76,9 @@ func (s *Store) UpdateScanStatus(c context.Context, scanID uint64, status ScanSt
 	return nil
 }
 
-func (s *Store) SaveSastResult(c context.Context, scanID uint64, result *ScanResult) error {
+func (s *Store) SaveSastResult(c context.Context, scanID uint64, result *ScanResult) (string,error) {
 	if result == nil {
-		return fmt.Errorf("scan %d result is required", scanID)
+		return "", fmt.Errorf("scan %d result is required", scanID)
 	}
 	const query = `
 		UPDATE sast_scans
@@ -92,13 +92,13 @@ func (s *Store) SaveSastResult(c context.Context, scanID uint64, result *ScanRes
 
 	tag, err := s.db.Exec(c, query, result.ReportPath, result.CommitSHA, ScanSuccess, scanID)
 	if err != nil {
-		return err
+		return "",err
 	}
 	if tag.RowsAffected() != 1 {
-		return fmt.Errorf("scan %d not found", scanID)
+		return "",fmt.Errorf("scan %d not found", scanID)
 	}
 
-	return nil
+	return result.ReportPath, nil
 }
 
 func (s *Store) ClaimScan(ctx context.Context, scanID uint64, workerID string) error {

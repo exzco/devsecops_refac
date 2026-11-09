@@ -48,6 +48,7 @@ func main() {
 	})
 	e.POST("/api/v1/scans/create", handler.CreateScanRequest)
 	e.GET("/api/v1/workers", handler.ListWorkers)
+	e.GET("/api/v1/scans/:id", handler.GetScan)
 
 	// 服务启动
 	if err := e.Start(":9000"); err != nil {

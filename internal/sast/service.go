@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"os"
 	"time"
 )
 
@@ -70,8 +71,25 @@ func (s *Service) ProcessScan(c context.Context, scanID uint64, workerID string)
 		return fmt.Errorf("scan %d: %w", scan.ID, err)
 	}
 
-	if err := s.store.SaveSastResult(c, scanID, result); err != nil {
+	if _, err := s.store.SaveSastResult(c, scanID, result); err != nil {
 		return fmt.Errorf("save sast result: %w", err)
 	}
+	file, err := os.Open(result.ReportPath)
+	if err != nil {
+		return fmt.Errorf("open file errpr:%w",err)
+	}
+	defer file.Close()
+	// 解析 sarif
+	ParseSARIF(file)
+	// sarif 结果持久化
+	//todo...
 	return nil
+}
+
+func (s *Service) GetScan(ctx context.Context, scanID uint64) (*Scan, error) {
+	scan, err := s.store.GetByID(ctx, scanID)
+	if err != nil {
+		return nil, fmt.Errorf("get scan %d: %w", scanID, err)
+	}
+	return scan, nil
 }

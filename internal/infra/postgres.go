@@ -15,6 +15,6 @@ func ConnectDB(c context.Context,dsn string) (*pgxpool.Pool, error) {
 		db.Close()
 		return nil,err
 	}
-	fmt.Print("dbPool init success")
+	fmt.Print("dbPool init success\n")
 	return db, nil 
 }

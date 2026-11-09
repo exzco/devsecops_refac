@@ -18,6 +18,6 @@ func ConnectRedis(c context.Context, addr, password string, db int) (*redis.Clie
 		rdb.Close()
 		return nil,err
 	}
-	fmt.Print("redis init success")
+	fmt.Print("redis init success\n")
 	return rdb,nil
 }

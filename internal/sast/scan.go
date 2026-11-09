@@ -153,6 +153,7 @@ func (s *SASTScanner) Scan(ctx context.Context, repoURL string, language string,
 
 	cmd = exec.CommandContext(ctx, s.CodeQLPath,
 		"database", "analyze",
+		"--sarif-add-snippets",
 		"--format=sarifv2.1.0",
 		"--output="+reportPath,
 		"--", dbDir, querySuite,
