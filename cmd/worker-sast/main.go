@@ -26,22 +26,28 @@ func main() {
 	}
 }
 
+func generateWorkerID() (string, error) {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	hostname, _ := os.Hostname()
+	return fmt.Sprintf("%s-%x", hostname, b), nil
+}
+
 func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	workerID, err := generateWorkerID()
+    if err != nil {
+        return fmt.Errorf("generate worker id: %w", err)
+    }
 
 	cfg, err := config.LoadEnv()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	workerID := strings.TrimSpace(cfg.WorkerID)
-	if workerID == "" {
-		hostname, err := os.Hostname()
-		if err != nil {
-			return fmt.Errorf("get worker hostname: %w", err)
-		}
-		workerID = "sast-" + hostname + "-" + rand.Text()
-	}
+
 	if strings.TrimSpace(cfg.SASTScanner.WorkRoot) == "" {
 		return fmt.Errorf("WORK_ROOT is required")
 	}
@@ -70,7 +76,6 @@ func run() error {
 	}
 	defer rdb.Close()
 
-	// 退出时关闭客户端，解除正在进行的 Redis 网络读取。
 	stopRedisClose := context.AfterFunc(ctx, func() {
 		_ = rdb.Close()
 	})
@@ -82,10 +87,10 @@ func run() error {
 	service := sast.NewService(store, queue, scanner)
 	worker := sast.NewWorker(workerID, service)
 
-	log.Printf("SAST worker started: id=%s", workerID)
+	log.Printf("SAST worker started: workerID=%s", workerID)
 	if err := worker.Run(ctx); err != nil {
 		return err
 	}
-	log.Printf("SAST worker stopped: id=%s", workerID)
+	log.Printf("SAST worker stopped: workerID=%s", workerID)
 	return nil
 }

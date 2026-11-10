@@ -13,6 +13,14 @@ type sarifMessage struct {
 	Text string `json:"text"`
 }
 
+type sarifRegion struct {
+	StartLine   int          `json:"startLine"`
+	StartColumn int          `json:"startColumn"`
+	EndLine     int          `json:"endLine"`
+	EndColumn   int          `json:"endColumn"`
+	Snippet     sarifMessage `json:"snippet"`
+}
+
 type sarifRule struct {
 	ID               string       `json:"id"`
 	ShortDescription sarifMessage `json:"shortDescription"`
@@ -37,13 +45,8 @@ type sarifLocation struct {
 			Index *int   `json:"index"`
 		} `json:"artifactLocation"`
 
-		Region struct {
-			StartLine   int          `json:"startLine"`
-			StartColumn int          `json:"startColumn"`
-			EndLine     int          `json:"endLine"`
-			EndColumn   int          `json:"endColumn"`
-			Snippet     sarifMessage `json:"snippet"`
-		} `json:"region"`
+		Region        sarifRegion `json:"region"`
+		ContextRegion sarifRegion `json:"contextRegion"`
 	} `json:"physicalLocation"`
 }
 
@@ -110,15 +113,28 @@ func convertSARIFLocation(loc sarifLocation, artifactURIs []string) CodeLocation
 		startColumn = 1
 	}
 
+	snippet := region.Snippet.Text
+	snippetStartLine := region.StartLine
+	if physical.ContextRegion.Snippet.Text != "" {
+		snippet = physical.ContextRegion.Snippet.Text
+		if physical.ContextRegion.StartLine > 0 {
+			snippetStartLine = physical.ContextRegion.StartLine
+		}
+	}
+	if snippet == "" {
+		snippetStartLine = 0
+	}
+
 	return CodeLocation{
-		ID:          loc.ID,
-		File:        file,
-		StartLine:   region.StartLine,
-		StartColumn: startColumn,
-		EndLine:     endLine,
-		EndColumn:   region.EndColumn,
-		Message:     loc.Message.Text,
-		Snippet:     region.Snippet.Text,
+		ID:               loc.ID,
+		File:             file,
+		StartLine:        region.StartLine,
+		StartColumn:      startColumn,
+		EndLine:          endLine,
+		EndColumn:        region.EndColumn,
+		Message:          loc.Message.Text,
+		Snippet:          snippet,
+		SnippetStartLine: snippetStartLine,
 	}
 }
 
@@ -145,14 +161,15 @@ type Finding struct {
 }
 
 type CodeLocation struct {
-	ID          *int   `json:"id,omitempty"`
-	File        string `json:"file"`
-	StartLine   int    `json:"start_line,omitempty"`
-	StartColumn int    `json:"start_column,omitempty"`
-	EndLine     int    `json:"end_line,omitempty"`
-	EndColumn   int    `json:"end_column,omitempty"`
-	Message     string `json:"message,omitempty"`
-	Snippet     string `json:"snippet,omitempty"`
+	ID               *int   `json:"id,omitempty"`
+	File             string `json:"file"`
+	StartLine        int    `json:"start_line,omitempty"`
+	StartColumn      int    `json:"start_column,omitempty"`
+	EndLine          int    `json:"end_line,omitempty"`
+	EndColumn        int    `json:"end_column,omitempty"`
+	Message          string `json:"message,omitempty"`
+	Snippet          string `json:"snippet,omitempty"`
+	SnippetStartLine int    `json:"snippet_start_line,omitempty"`
 }
 
 type CodeFlow struct {

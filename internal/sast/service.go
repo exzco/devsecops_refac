@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
+	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -47,43 +49,106 @@ func (s *Service) CreateScan(c context.Context, repoURL string, language string,
 	return scan, nil
 }
 
-func (s *Service) ProcessScan(c context.Context, scanID uint64, workerID string) error {
+func (s *Service) CreateScanWithZip(c context.Context, filename string, zipReader io.Reader, language string, timeout time.Duration) (*Scan, error) {
+	filename = strings.TrimSpace(filename)
+	if filename == "" {
+		filename = "source.zip"
+	}
+
+	scan := &Scan{
+		RepoURL:  filename,
+		Status:   ScanPending,
+		Language: language,
+		Timeout:  timeout,
+	}
+
+	if err := s.store.Create(c, scan); err != nil {
+		return nil, fmt.Errorf("service create scan error: %w", err)
+	}
+
+	uploadDir := filepath.Join(s.scanner.WorkRoot, "uploads")
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		return nil, fmt.Errorf("create uploads dir: %w", err)
+	}
+
+	zipFilePath := filepath.Join(uploadDir, fmt.Sprintf("%d.zip", scan.ID))
+	dst, err := os.Create(zipFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("create zip file on disk: %w", err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, zipReader); err != nil {
+		return nil, fmt.Errorf("write uploaded zip: %w", err)
+	}
+
+	if err := s.queue.Push(c, scan.ID); err != nil {
+		return nil, fmt.Errorf("service push scan error: %w", err)
+	}
+
+	return scan, nil
+}
+
+func (s *Service) ProcessScan(c context.Context, scanID uint64, workerID string) (err error) {
 	scan, err := s.store.GetByID(c, scanID)
 	if err != nil {
 		return fmt.Errorf("get scan from id error: %w", err)
 	}
-	
+
 	if err := s.store.ClaimScan(c, scanID, workerID); err != nil {
 		return err
 	}
 
-	result, err := s.scanner.Scan(c, scan.RepoURL, scan.Language, scan.Timeout)
-	if err != nil {
+	defer func() {
+		if err == nil {
+			return
+		}
 		failureCtx, cancel := context.WithTimeout(context.WithoutCancel(c), 5*time.Second)
 		defer cancel()
 		updateErr := s.store.UpdateScanStatus(failureCtx, scan.ID, ScanFailed, err.Error())
 		if updateErr != nil {
-			return errors.Join(
-				fmt.Errorf("scan %d: %w", scan.ID, err),
+			err = errors.Join(
+				err,
 				fmt.Errorf("save failed status: %w", updateErr),
 			)
 		}
+	}()
+
+	zipFilePath := filepath.Join(s.scanner.WorkRoot, "uploads", fmt.Sprintf("%d.zip", scanID))
+	if _, err := os.Stat(zipFilePath); err != nil {
+		if _, err2 := os.Stat(scan.RepoURL); err2 == nil {
+			zipFilePath = scan.RepoURL
+		} else {
+			return fmt.Errorf("source zip archive not found at %s: %w", zipFilePath, err)
+		}
+	}
+
+	result, err := s.scanner.Scan(c, zipFilePath, scan.Language, scan.Timeout)
+	if err != nil {
 		return fmt.Errorf("scan %d: %w", scan.ID, err)
 	}
 
-	if _, err := s.store.SaveSastResult(c, scanID, result); err != nil {
-		return fmt.Errorf("save sast result: %w", err)
-	}
 	file, err := os.Open(result.ReportPath)
 	if err != nil {
-		return fmt.Errorf("open file errpr:%w",err)
+		return fmt.Errorf("open SARIF report: %w", err)
 	}
-	defer file.Close()
-	// 解析 sarif
-	ParseSARIF(file)
-	// sarif 结果持久化
-	//todo...
+	findings, parseErr := ParseSARIF(file)
+	closeErr := file.Close()
+	if parseErr != nil || closeErr != nil {
+		return fmt.Errorf("read SARIF report: %w", errors.Join(parseErr, closeErr))
+	}
+	if err := s.store.SaveFindings(c, scanID, findings); err != nil {
+		return fmt.Errorf("save findings: %w", err)
+	}
+	if _, err := s.store.SaveSastResult(c, scanID, result); err != nil {
+		return fmt.Errorf("save successful scan result: %w", err)
+	}
+
 	return nil
+}
+
+func (s *Service) ListScans(ctx context.Context) ([]Scan, error) {
+	return s.store.ListScans(ctx)
 }
 
 func (s *Service) GetScan(ctx context.Context, scanID uint64) (*Scan, error) {
@@ -92,4 +157,36 @@ func (s *Service) GetScan(ctx context.Context, scanID uint64) (*Scan, error) {
 		return nil, fmt.Errorf("get scan %d: %w", scanID, err)
 	}
 	return scan, nil
+}
+
+func (s *Service) GetScanFindings(ctx context.Context, scanID uint64) ([]Finding, error) {
+	if _, err := s.store.GetByID(ctx, scanID); err != nil {
+		return nil, fmt.Errorf("get scan %d: %w", scanID, err)
+	}
+
+	findings, err := s.store.ListFindings(ctx, scanID)
+	if err != nil {
+		return nil, fmt.Errorf("get scan %d findings: %w", scanID, err)
+	}
+
+	return findings, nil
+}
+
+var ErrScanRunning = errors.New("cannot delete findings while scan is running")
+
+func (s *Service) DeleteScanFindings(ctx context.Context, scanID uint64) error {
+	scan, err := s.store.GetByID(ctx, scanID)
+	if err != nil {
+		return fmt.Errorf("get scan %d: %w", scanID, err)
+	}
+
+	if scan.Status == ScanRunning {
+		return ErrScanRunning
+	}
+
+	if err := s.store.DeleteFindings(ctx, scanID); err != nil {
+		return fmt.Errorf("delete scan %d findings: %w", scanID, err)
+	}
+
+	return nil
 }

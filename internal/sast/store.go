@@ -2,6 +2,7 @@ package sast
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -59,6 +60,37 @@ func (s *Store) GetByID(c context.Context, scanID uint64) (*Scan, error) {
 	return scan, nil
 }
 
+func (s *Store) ListScans(ctx context.Context) ([]Scan, error) {
+	const query = `
+		SELECT id, repo_url, status, COALESCE(error, ''), created_at, updated_at,
+		       language, timeout, report_path, commit_sha, worker_id
+		FROM sast_scans
+		ORDER BY created_at DESC, id DESC
+	`
+	rows, err := s.db.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query scans: %w", err)
+	}
+	defer rows.Close()
+
+	scans := make([]Scan, 0)
+	for rows.Next() {
+		var scan Scan
+		if err := rows.Scan(
+			&scan.ID, &scan.RepoURL, &scan.Status, &scan.Error,
+			&scan.CreatedAt, &scan.UpdatedAt, &scan.Language, &scan.Timeout,
+			&scan.ReportPath, &scan.CommitSHA, &scan.WorkerID,
+		); err != nil {
+			return nil, fmt.Errorf("read scan row: %w", err)
+		}
+		scans = append(scans, scan)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate scans: %w", err)
+	}
+	return scans, nil
+}
+
 func (s *Store) UpdateScanStatus(c context.Context, scanID uint64, status ScanStatus, e string) error {
 	const query = `
 		UPDATE sast_scans
@@ -76,7 +108,7 @@ func (s *Store) UpdateScanStatus(c context.Context, scanID uint64, status ScanSt
 	return nil
 }
 
-func (s *Store) SaveSastResult(c context.Context, scanID uint64, result *ScanResult) (string,error) {
+func (s *Store) SaveSastResult(c context.Context, scanID uint64, result *ScanResult) (string, error) {
 	if result == nil {
 		return "", fmt.Errorf("scan %d result is required", scanID)
 	}
@@ -92,10 +124,10 @@ func (s *Store) SaveSastResult(c context.Context, scanID uint64, result *ScanRes
 
 	tag, err := s.db.Exec(c, query, result.ReportPath, result.CommitSHA, ScanSuccess, scanID)
 	if err != nil {
-		return "",err
+		return "", err
 	}
 	if tag.RowsAffected() != 1 {
-		return "",fmt.Errorf("scan %d not found", scanID)
+		return "", fmt.Errorf("scan %d not found", scanID)
 	}
 
 	return result.ReportPath, nil
@@ -119,6 +151,130 @@ func (s *Store) ClaimScan(ctx context.Context, scanID uint64, workerID string) e
 	}
 	if tag.RowsAffected() != 1 {
 		return fmt.Errorf("scan %d does not exist or is not pending", scanID)
+	}
+	return nil
+}
+
+func (s *Store) SaveFindings(ctx context.Context, scanID uint64, findings []Finding) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin save findings transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(context.Background())
+	}()
+
+	const query = `
+		INSERT INTO sast_findings (scan_id, ordinal, rule_id, title, message, level,
+		security_score, cwes, locations, related_locations,code_flows, fingerprints)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		`
+	for ordinal, finding := range findings {
+		cwes, err := json.Marshal(finding.CWEs)
+		if err != nil {
+			return err
+		}
+		locations, err := json.Marshal(finding.Locations)
+		if err != nil {
+			return err
+		}
+		related, err := json.Marshal(finding.Related)
+		if err != nil {
+			return err
+		}
+		codeFlows, err := json.Marshal(finding.CodeFlows)
+		if err != nil {
+			return err
+		}
+
+		fingerprints, err := json.Marshal(finding.Fingerprints)
+		if err != nil {
+			return err
+		}
+
+		var securityScore any
+		if finding.SecurityScore != nil {
+			securityScore = *finding.SecurityScore
+		}
+
+		_, err = tx.Exec(
+			ctx,
+			query,
+			scanID,
+			ordinal,
+			finding.RuleID,
+			finding.Title,
+			finding.Message,
+			finding.Level,
+			securityScore,
+			string(cwes),
+			string(locations),
+			string(related),
+			string(codeFlows),
+			string(fingerprints),
+		)
+
+		if err != nil {
+			return fmt.Errorf("insert finding %d for scan %d: %w", ordinal, scanID, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit findings: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListFindings(ctx context.Context, scanID uint64) ([]Finding, error) {
+	const query = `
+		SELECT rule_id, title, message, level, security_score,
+		       cwes, locations, related_locations, code_flows, fingerprints
+		FROM sast_findings
+		WHERE scan_id = $1
+		ORDER BY ordinal
+	`
+
+	rows, err := s.db.Query(ctx, query, scanID)
+	if err != nil {
+		return nil, fmt.Errorf("query findings: %w", err)
+	}
+	defer rows.Close()
+
+	findings := make([]Finding, 0)
+
+	for rows.Next() {
+		var finding Finding
+
+		err := rows.Scan(
+			&finding.RuleID,
+			&finding.Title,
+			&finding.Message,
+			&finding.Level,
+			&finding.SecurityScore,
+			&finding.CWEs,
+			&finding.Locations,
+			&finding.Related,
+			&finding.CodeFlows,
+			&finding.Fingerprints,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan finding row: %w", err)
+		}
+
+		findings = append(findings, finding)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate findings: %w", err)
+	}
+
+	return findings, nil
+}
+
+func (s *Store) DeleteFindings(ctx context.Context, scanID uint64) error {
+	const query = `DELETE FROM sast_findings WHERE scan_id = $1`
+	_, err := s.db.Exec(ctx, query, scanID)
+	if err != nil {
+		return fmt.Errorf("delete findings for scan %d: %w", scanID, err)
 	}
 	return nil
 }

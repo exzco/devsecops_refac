@@ -1,0 +1,3 @@
+sast 任务投递
+curl -X POST http://localhost:9000/api/v1/scans -H 'Content-Type: application/json' -d '{"repo_url":"https://github.com/exzco/jnsecBBS.git","language":"go","timeout":1800}'
+
