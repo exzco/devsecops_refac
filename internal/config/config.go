@@ -1,10 +1,14 @@
 package config
 
-import "fmt"
-import "os"
-import "strconv"
-import "github.com/joho/godotenv"
-import "devsecops/internal/sast"
+import (
+	"fmt"
+	"os"
+	"strconv"
+
+	"devsecops/internal/dast"
+	"devsecops/internal/sast"
+	"github.com/joho/godotenv"
+)
 
 type Config struct {
 	AppName    string
@@ -15,7 +19,11 @@ type Config struct {
 	Postgres    PostgresConfig
 	Redis       RedisConfig
 	SASTScanner sast.SASTScanner
+	DASTScanner dast.DASTScannerConfig
+	DASTServer  dast.ServerConfig
+	DASTWorker  dast.WorkerConfig
 }
+
 type PostgresConfig struct {
 	Host     string
 	Port     int
@@ -31,29 +39,37 @@ type RedisConfig struct {
 	DB       int
 }
 
+func envInt(key string) (int, error) {
+	value, err := strconv.Atoi(os.Getenv(key))
+	if err != nil {
+		return 0, fmt.Errorf("load %s : %w ", key, err)
+	}
+	return value, nil
+}
+
 func LoadEnv() (*Config, error) {
 	if err := godotenv.Load(); err != nil {
 		return nil, fmt.Errorf("load .env : %w ", err)
 	}
 
-	serverPort, err := strconv.Atoi(os.Getenv("SERVER_PORT"))
+	serverPort, err := envInt("SERVER_PORT")
 	if err != nil {
-		return nil, fmt.Errorf("load SERVER_PORT : %w ", err)
+		return nil, err
 	}
 
-	postgresPort, err := strconv.Atoi(os.Getenv("POSTGRES_PORT"))
+	postgresPort, err := envInt("POSTGRES_PORT")
 	if err != nil {
-		return nil, fmt.Errorf("load POSTGRES_PORT : %w ", err)
+		return nil, err
 	}
 
-	redisPort, err := strconv.Atoi(os.Getenv("REDIS_PORT"))
+	redisPort, err := envInt("REDIS_PORT")
 	if err != nil {
-		return nil, fmt.Errorf("load REDIS_PORT : %w ", err)
+		return nil, err
 	}
 
-	redisDB, err := strconv.Atoi(os.Getenv("REDIS_DB"))
+	redisDB, err := envInt("REDIS_DB")
 	if err != nil {
-		return nil, fmt.Errorf("load REDIS_DB : %w ", err)
+		return nil, err
 	}
 
 	cfg := &Config{
@@ -78,6 +94,18 @@ func LoadEnv() (*Config, error) {
 			CodeQLPath: os.Getenv("CODEQL_PATH"),
 			WorkRoot:   os.Getenv("WORK_ROOT"),
 			QuerySuite: os.Getenv("QUERY_SUITE"),
+		},
+		DASTScanner: dast.DASTScannerConfig{
+			NmapPath:     os.Getenv("DAST_NMAP_PATH"),
+			NucleiPath:   os.Getenv("DAST_NUCLEI_PATH"),
+			TemplateRoot: os.Getenv("DAST_TEMPLATE_ROOT"),
+		},
+		DASTServer: dast.ServerConfig{
+			ResultRoot: os.Getenv("DAST_RESULT_ROOT"),
+		},
+		DASTWorker: dast.WorkerConfig{
+			ClusterID:   os.Getenv("DAST_CLUSTER_ID"),
+			NetworkZone: os.Getenv("DAST_NETWORK_ZONE"),
 		},
 	}
 

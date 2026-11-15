@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -160,33 +161,71 @@ func (s *Service) GetScan(ctx context.Context, scanID uint64) (*Scan, error) {
 }
 
 func (s *Service) GetScanFindings(ctx context.Context, scanID uint64) ([]Finding, error) {
-	if _, err := s.store.GetByID(ctx, scanID); err != nil {
-		return nil, fmt.Errorf("get scan %d: %w", scanID, err)
-	}
-
 	findings, err := s.store.ListFindings(ctx, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("get scan %d findings: %w", scanID, err)
 	}
-
 	return findings, nil
 }
 
-var ErrScanRunning = errors.New("cannot delete findings while scan is running")
-
 func (s *Service) DeleteScanFindings(ctx context.Context, scanID uint64) error {
+	if err := s.store.DeleteFindings(ctx, scanID); err != nil {
+		return fmt.Errorf("delete scan %d findings: %w", scanID, err)
+	}
+
+	return nil
+}
+
+func (s *Service) DeleteScan(ctx context.Context, scanID uint64) error {
 	scan, err := s.store.GetByID(ctx, scanID)
 	if err != nil {
 		return fmt.Errorf("get scan %d: %w", scanID, err)
 	}
 
 	if scan.Status == ScanRunning {
-		return ErrScanRunning
+		return errors.New("cannot delete scan while it is running")
 	}
 
-	if err := s.store.DeleteFindings(ctx, scanID); err != nil {
-		return fmt.Errorf("delete scan %d findings: %w", scanID, err)
+	if err := s.store.DeleteScan(ctx, scanID); err != nil {
+		return fmt.Errorf("delete scan %d: %w", scanID, err)
 	}
 
 	return nil
+}
+
+type WorkerEnv struct {
+	WorkerID   string `json:"worker_id"`
+	Hostname   string `json:"hostname"`
+	OS         string `json:"os"`
+	Arch       string `json:"arch"`
+	PID        int    `json:"pid"`
+	NumCPU     int    `json:"num_cpu"`
+	CodeQLPath string `json:"codeql_path"`
+	CodeQLOk   bool   `json:"codeql_ok"`
+	WorkRoot   string `json:"work_root"`
+}
+
+func (s *Service) DetectEnvironment(workerID string) (*WorkerEnv, error) {
+	hostname, _ := os.Hostname()
+	codeqlOk := false
+	codeqlPath := s.scanner.CodeQLPath
+	workRoot := s.scanner.WorkRoot
+	
+	if codeqlPath != "" {
+		if _, err := os.Stat(codeqlPath); err == nil {
+			codeqlOk = true
+		}
+	}
+	
+	return &WorkerEnv{
+		WorkerID:   workerID,
+		Hostname:   hostname,
+		OS:         runtime.GOOS,
+		Arch:       fmt.Sprintf("%s %s", runtime.GOOS, runtime.GOARCH),
+		PID:        os.Getpid(),
+		NumCPU:     runtime.NumCPU(),
+		CodeQLPath: codeqlPath,
+		CodeQLOk:   codeqlOk,
+		WorkRoot:   workRoot,
+	}, nil
 }

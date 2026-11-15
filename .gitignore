@@ -1,0 +1,13 @@
+.env
+AGENTS.md
+internal/sast/result/
+internal/dast/result/
+web/node_modules/
+internal/test
+bin
+*image*
+server
+worker-sast
+**/node_modules
+/docs/
+worker-dast

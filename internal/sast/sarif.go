@@ -126,15 +126,21 @@ func convertSARIFLocation(loc sarifLocation, artifactURIs []string) CodeLocation
 	}
 
 	return CodeLocation{
-		ID:               loc.ID,
-		File:             file,
-		StartLine:        region.StartLine,
-		StartColumn:      startColumn,
-		EndLine:          endLine,
-		EndColumn:        region.EndColumn,
-		Message:          loc.Message.Text,
-		Snippet:          snippet,
-		SnippetStartLine: snippetStartLine,
+		ID:                    loc.ID,
+		File:                  file,
+		URI:                   file,
+		StartLine:             region.StartLine,
+		StartLineCamel:        region.StartLine,
+		StartColumn:           startColumn,
+		StartColumnCamel:      startColumn,
+		EndLine:               endLine,
+		EndLineCamel:          endLine,
+		EndColumn:             region.EndColumn,
+		EndColumnCamel:        region.EndColumn,
+		Message:               loc.Message.Text,
+		Snippet:               snippet,
+		SnippetStartLine:      snippetStartLine,
+		SnippetStartLineCamel: snippetStartLine,
 	}
 }
 
@@ -161,19 +167,26 @@ type Finding struct {
 }
 
 type CodeLocation struct {
-	ID               *int   `json:"id,omitempty"`
-	File             string `json:"file"`
-	StartLine        int    `json:"start_line,omitempty"`
-	StartColumn      int    `json:"start_column,omitempty"`
-	EndLine          int    `json:"end_line,omitempty"`
-	EndColumn        int    `json:"end_column,omitempty"`
-	Message          string `json:"message,omitempty"`
-	Snippet          string `json:"snippet,omitempty"`
-	SnippetStartLine int    `json:"snippet_start_line,omitempty"`
+	ID                    *int   `json:"id,omitempty"`
+	File                  string `json:"file"`
+	URI                   string `json:"uri,omitempty"`
+	StartLine             int    `json:"start_line,omitempty"`
+	StartLineCamel        int    `json:"startLine,omitempty"`
+	StartColumn           int    `json:"start_column,omitempty"`
+	StartColumnCamel      int    `json:"startColumn,omitempty"`
+	EndLine               int    `json:"end_line,omitempty"`
+	EndLineCamel          int    `json:"endLine,omitempty"`
+	EndColumn             int    `json:"end_column,omitempty"`
+	EndColumnCamel        int    `json:"endColumn,omitempty"`
+	Message               string `json:"message,omitempty"`
+	Snippet               string `json:"snippet,omitempty"`
+	SnippetStartLine      int    `json:"snippet_start_line,omitempty"`
+	SnippetStartLineCamel int    `json:"snippetStartLine,omitempty"`
 }
 
 type CodeFlow struct {
-	ThreadFlows []ThreadFlow `json:"thread_flows"`
+	Steps       []FlowStep   `json:"steps"`
+	ThreadFlows []ThreadFlow `json:"thread_flows,omitempty"`
 }
 
 type ThreadFlow struct {
@@ -182,6 +195,7 @@ type ThreadFlow struct {
 
 type FlowStep struct {
 	Location CodeLocation `json:"location"`
+	Message  string       `json:"message,omitempty"`
 	Kinds    []string     `json:"kinds,omitempty"`
 }
 
@@ -259,17 +273,6 @@ func ParseSARIF(r io.Reader) ([]Finding, error) {
 				Fingerprints: result.PartialFingerprints,
 			}
 
-			if finding.Title == "" {
-				finding.Title = ruleID
-			}
-
-			if finding.Level == "" {
-				finding.Level = rule.DefaultConfiguration.Level
-			}
-			if finding.Level == "" {
-				finding.Level = "warning"
-			}
-
 			if rawScore := rule.Properties.SecuritySeverity; rawScore != "" {
 				score, err := strconv.ParseFloat(rawScore, 64)
 				if err != nil || !(score >= 0 && score <= 10) {
@@ -294,6 +297,7 @@ func ParseSARIF(r io.Reader) ([]Finding, error) {
 			// 保留每条路径及其节点顺序。
 			for _, rawFlow := range result.CodeFlows {
 				flow := CodeFlow{
+					Steps:       make([]FlowStep, 0),
 					ThreadFlows: make([]ThreadFlow, 0),
 				}
 
@@ -303,10 +307,18 @@ func ParseSARIF(r io.Reader) ([]Finding, error) {
 					}
 
 					for _, node := range rawThread.Locations {
-						thread.Steps = append(thread.Steps, FlowStep{
-							Location: convertSARIFLocation(node.Location, artifactURIs),
+						stepLoc := convertSARIFLocation(node.Location, artifactURIs)
+						stepMsg := node.Location.Message.Text
+						if stepMsg == "" {
+							stepMsg = stepLoc.Message
+						}
+						step := FlowStep{
+							Location: stepLoc,
+							Message:  stepMsg,
 							Kinds:    node.Kinds,
-						})
+						}
+						thread.Steps = append(thread.Steps, step)
+						flow.Steps = append(flow.Steps, step)
 					}
 
 					flow.ThreadFlows = append(flow.ThreadFlows, thread)

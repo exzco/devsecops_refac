@@ -73,9 +73,17 @@
             <span class="text-xs text-slate-500 font-mono">{{ fmtDuration(record.timeout) }}</span>
           </template>
           <template v-else-if="column.key === 'action'">
-            <a-button type="link" size="small" @click="router.push(`/sast/scans/${record.id}`)">
-              查看报告
-            </a-button>
+            <a-popconfirm
+              title="确定要删除此任务及关联漏洞报告吗？"
+              ok-text="确认删除"
+              cancel-text="取消"
+              ok-type="danger"
+              @confirm="handleDeleteScan(record.id)"
+            >
+              <a-button type="link" danger size="small">
+                删除
+              </a-button>
+            </a-popconfirm>
           </template>
         </template>
       </a-table>
@@ -145,9 +153,9 @@ const selectedFile = ref<File | null>(null)
 
 const columns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 70 },
-  { title: '源码工程 / 压缩包', dataIndex: 'repo_url', key: 'repo_url' },
+  { title: '压缩包', dataIndex: 'repo_url', key: 'repo_url' },
   { title: '语言', dataIndex: 'language', key: 'language', width: 120 },
-  { title: '状态', dataIndex: 'status', key: 'status', width: 120 },
+  { title: '状态', dataIndex: 'status', key: 'status', width: 120, align: 'center' as const },
   { title: '执行 Worker', dataIndex: 'worker_id', key: 'worker_id', width: 180 },
   { title: '超时配置', dataIndex: 'timeout', key: 'timeout', width: 110 },
   { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 170 },
@@ -215,6 +223,16 @@ async function load() {
     message.error(e.message)
   } finally {
     loading.value = false
+  }
+}
+
+async function handleDeleteScan(id: number) {
+  try {
+    await api.deleteScan(id)
+    message.success(`扫描任务 #${id} 已成功删除`)
+    await load()
+  } catch (e: any) {
+    message.error(e.message || '删除任务失败')
   }
 }
 

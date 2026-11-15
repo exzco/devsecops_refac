@@ -2,6 +2,7 @@ package sast
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
@@ -30,6 +31,10 @@ func NewWorker(id string, service *Service) *Worker {
 }
 
 func (w *Worker) Run(ctx context.Context) error {
+	if err := w.sendEnvironment(ctx); err != nil {
+		log.Printf("worker=%s send environment failed: %v", w.id, err)
+	}
+
 	if err := w.sendHeartbeat(ctx); err != nil {
 		if ctx.Err() != nil {
 			return nil
@@ -93,6 +98,26 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 
+func (w *Worker) sendEnvironment(ctx context.Context) error {
+	env, err := w.service.DetectEnvironment(w.id)
+	if err != nil {
+		return fmt.Errorf("detect environment: %w", err)
+	}
+	raw, err := json.Marshal(env)
+	if err != nil {
+		return fmt.Errorf("marshal worker env: %w", err)
+	}
+
+	optCtx, cancel := context.WithTimeout(ctx, workerRedisTimeout)
+	defer cancel()
+
+	key := workerHeartbeatPrefix + w.id + ":env"
+	if err := w.service.queue.redis.Set(optCtx, key, string(raw), 7*24*time.Hour).Err(); err != nil {
+		return fmt.Errorf("send worker env to redis: %w", err)
+	}
+	return nil
+}
+
 func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	optCtx, cancel := context.WithTimeout(ctx, workerRedisTimeout)
 	defer cancel()
@@ -113,6 +138,13 @@ type WorkerStatus struct {
 	ID         string     `json:"worker_id"`
 	Online     bool       `json:"online"`
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	Hostname   string     `json:"hostname,omitempty"`
+	Arch       string     `json:"arch,omitempty"`
+	PID        int        `json:"pid,omitempty"`
+	NumCPU     int        `json:"num_cpu,omitempty"`
+	CodeQLPath string     `json:"codeql_path,omitempty"`
+	CodeQLOk   bool       `json:"codeql_ok,omitempty"`
+	WorkRoot   string     `json:"work_root,omitempty"`
 }
 
 func (s *Service) ListWorkers(ctx context.Context) ([]WorkerStatus, error) {
@@ -128,20 +160,44 @@ func (s *Service) ListWorkers(ctx context.Context) ([]WorkerStatus, error) {
 		return workers, nil
 	}
 	sort.Strings(ids)
-	keys := make([]string, len(ids))
+	aliveKeys := make([]string, len(ids))
+	envKeys := make([]string, len(ids))
 	for i, id := range ids {
-		keys[i] = workerHeartbeatPrefix + id + ":alive"
+		aliveKeys[i] = workerHeartbeatPrefix + id + ":alive"
+		envKeys[i] = workerHeartbeatPrefix + id + ":env"
 	}
-	values, err := s.queue.redis.MGet(ctx, keys...).Result()
+	aliveValues, err := s.queue.redis.MGet(ctx, aliveKeys...).Result()
 	if err != nil {
 		return nil, fmt.Errorf("read worker heartbeats: %w", err)
 	}
+	envValues, _ := s.queue.redis.MGet(ctx, envKeys...).Result()
+
 	for i, id := range ids {
-		worker := WorkerStatus{ID: id, Online: values[i] != nil}
-		if value, ok := values[i].(string); ok {
+		worker := WorkerStatus{ID: id, Online: aliveValues[i] != nil}
+		if value, ok := aliveValues[i].(string); ok {
 			lastSeen, err := time.Parse(time.RFC3339Nano, value)
 			if err == nil {
 				worker.LastSeenAt = &lastSeen
+			}
+		}
+		if i < len(envValues) {
+			if envRaw, ok := envValues[i].(string); ok && envRaw != "" {
+				var env WorkerEnv
+				if err := json.Unmarshal([]byte(envRaw), &env); err == nil {
+					worker.Hostname = env.Hostname
+					worker.Arch = env.Arch
+					worker.PID = env.PID
+					worker.NumCPU = env.NumCPU
+					worker.CodeQLPath = env.CodeQLPath
+					worker.CodeQLOk = env.CodeQLOk
+					worker.WorkRoot = env.WorkRoot
+				}
+			}
+		}
+		if worker.Hostname == "" && strings.Contains(id, "-") {
+			parts := strings.Split(id, "-")
+			if len(parts) >= 2 {
+				worker.Hostname = parts[0]
 			}
 		}
 		workers = append(workers, worker)

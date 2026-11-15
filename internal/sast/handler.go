@@ -161,19 +161,31 @@ func (h *Handler) DeleteScanFindings(c *echo.Context) error {
 	}
 
 	err = h.service.DeleteScanFindings(c.Request().Context(), scanID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "scan not found"})
-	}
-	if errors.Is(err, ErrScanRunning) {
-		return c.JSON(http.StatusConflict, map[string]string{"error": err.Error()})
-	}
 	if err != nil {
-		c.Logger().Error("delete scan findings failed", "scan_id", scanID, "error", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to delete scan findings"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "findings deleted successfully",
+		"scan_id": scanID,
+	})
+}
+
+func (h *Handler) DeleteScan(c *echo.Context) error {
+	scanID, err := strconv.ParseUint(c.Param("id"), 10, 63)
+	if err != nil || scanID == 0 {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid scan id",
+		})
+	}
+
+	err = h.service.DeleteScan(c.Request().Context(), scanID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"message": "scan deleted successfully",
 		"scan_id": scanID,
 	})
 }

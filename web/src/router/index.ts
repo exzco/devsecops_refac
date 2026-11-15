@@ -27,14 +27,19 @@ export default createRouter({
     },
     // DAST
     {
-      path: '/dast/config',
-      component: () => import('@/views/PlaceholderView.vue'),
-      meta: { title: 'DAST 任务配置', breadcrumbs: ['平台首页', 'DAST 动态扫描', '扫描任务配置'] },
+      path: '/dast/assets',
+      component: () => import('@/views/DastAssets.vue'),
+      meta: { title: '资产列表', breadcrumbs: ['平台首页', 'DAST 动态扫描', '资产列表'] },
     },
     {
       path: '/dast/tasks',
-      component: () => import('@/views/PlaceholderView.vue'),
+      component: () => import('@/views/DastTaskList.vue'),
       meta: { title: 'DAST 任务列表', breadcrumbs: ['平台首页', 'DAST 动态扫描', '任务列表'] },
+    },
+    {
+      path: '/dast/tasks/:id',
+      component: () => import('@/views/DastTaskDetail.vue'),
+      meta: { title: '扫描详情', breadcrumbs: ['平台首页', 'DAST 动态扫描', '任务列表', '扫描详情'] },
     },
     {
       path: '/dast/pocs',

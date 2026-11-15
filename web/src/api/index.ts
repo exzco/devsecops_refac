@@ -1,7 +1,29 @@
 import axios from 'axios'
-import type { Scan, Finding, WorkerStatus, CreateScanPayload } from '@/types'
+import type {
+  Scan,
+  Finding,
+  Location,
+  WorkerStatus,
+  CreateScanPayload,
+  DastAsset,
+  DastAssetFilter,
+  DastCreateScanRequest,
+  DastFinding,
+  DastScan,
+  DastScanDetail,
+  DastTaskDetail,
+  DastWorkerStatus,
+} from '@/types'
 
 const http = axios.create({ baseURL: '/api/v1', timeout: 10_000 })
+
+// DAST 的接口按调用方隔离数据，请求必须带上身份；接入统一登录后改为读取令牌。
+const DAST_USER_ID = 'web-console'
+
+http.interceptors.request.use((config) => {
+  config.headers.set('X-User-Id', DAST_USER_ID)
+  return config
+})
 
 http.interceptors.response.use(
   (r) => r,
@@ -42,9 +64,55 @@ function normalizeScan(raw: ScanResponse): Scan {
   }
 }
 
+function normalizeLocation(raw: any): Location {
+  if (!raw) {
+    return { uri: '', startLine: 0, startColumn: 0, endLine: 0, endColumn: 0, snippet: '' }
+  }
+  return {
+    uri: raw.uri ?? raw.file ?? '',
+    startLine: raw.startLine ?? raw.start_line ?? 0,
+    startColumn: raw.startColumn ?? raw.start_column ?? 0,
+    endLine: raw.endLine ?? raw.end_line ?? 0,
+    endColumn: raw.endColumn ?? raw.end_column ?? 0,
+    snippet: raw.snippet ?? '',
+    snippetStartLine: raw.snippetStartLine ?? raw.snippet_start_line ?? raw.startLine ?? raw.start_line ?? 0,
+  }
+}
+
+function normalizeFinding(raw: any): Finding {
+  const codeFlows = (raw.code_flows ?? []).map((cf: any) => {
+    let steps: any[] = []
+    if (Array.isArray(cf.steps) && cf.steps.length > 0) {
+      steps = cf.steps
+    } else if (Array.isArray(cf.thread_flows) && cf.thread_flows.length > 0) {
+      steps = cf.thread_flows[0]?.steps ?? []
+    }
+    return {
+      steps: steps.map((s: any) => ({
+        location: normalizeLocation(s.location),
+        message: s.message ?? s.location?.message ?? '',
+      })),
+    }
+  })
+
+  return {
+    rule_id: raw.rule_id ?? raw.ruleId ?? '',
+    title: raw.title ?? '',
+    message: raw.message ?? '',
+    level: raw.level ?? 'warning',
+    security_score: raw.security_score ?? raw.securityScore ?? null,
+    cwes: raw.cwes ?? [],
+    locations: (raw.locations ?? []).map(normalizeLocation),
+    related_locations: (raw.related_locations ?? raw.relatedLocations ?? []).map(normalizeLocation),
+    code_flows: codeFlows,
+    fingerprints: raw.fingerprints ?? {},
+  }
+}
+
 export const api = {
   listScans: () => http.get<ScanResponse[]>('/scans').then((r) => r.data.map(normalizeScan)),
   getScan: (id: number) => http.get<ScanResponse>(`/scans/${id}`).then((r) => normalizeScan(r.data)),
+  deleteScan: (id: number) => http.delete(`/scans/${id}`),
   createScan: (payload: CreateScanPayload) => {
     if (payload.file) {
       const fd = new FormData()
@@ -56,6 +124,20 @@ export const api = {
     return http.post<ScanResponse>('/scans', payload).then((r) => normalizeScan(r.data))
   },
   getScanFindings: (id: number) =>
-    http.get<Finding[]>(`/scans/${id}/findings`).then((r) => r.data),
+    http.get<any[]>(`/scans/${id}/findings`).then((r) => r.data.map(normalizeFinding)),
   listWorkers: () => http.get<WorkerStatus[]>('/workers').then((r) => r.data),
+
+  // DAST
+  listDastAssets: (filter: DastAssetFilter = {}) =>
+    http.get<DastAsset[]>('/dast/assets', { params: filter }).then((r) => r.data),
+  createDastScan: (payload: DastCreateScanRequest) =>
+    http.post<DastScan>('/dast/scans', payload).then((r) => r.data),
+  listDastScans: () => http.get<DastScan[]>('/dast/scans').then((r) => r.data),
+  getDastScan: (id: string | number) =>
+    http.get<DastScanDetail>(`/dast/scans/${id}`).then((r) => r.data),
+  getDastTask: (id: string | number) =>
+    http.get<DastTaskDetail>(`/dast/tasks/${id}`).then((r) => r.data),
+  getDastScanFindings: (id: string | number) =>
+    http.get<DastFinding[]>(`/dast/scans/${id}/findings`).then((r) => r.data),
+  listDastWorkers: () => http.get<DastWorkerStatus[]>('/dast/workers').then((r) => r.data),
 }

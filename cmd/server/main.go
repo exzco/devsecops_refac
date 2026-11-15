@@ -2,19 +2,37 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 
 	"devsecops/internal/config"
+	"devsecops/internal/dast"
 	"devsecops/internal/infra"
 	"devsecops/internal/sast"
 	"devsecops/internal/webui"
 	"github.com/labstack/echo/v5"
 )
 
+// userID 是现有身份体系提供的调用方身份；接入统一登录后替换为令牌校验。
+func userID(r *http.Request) (string, error) {
+	id := strings.TrimSpace(r.Header.Get("X-User-Id"))
+	if id == "" {
+		return "", errors.New("X-User-Id header is required")
+	}
+	return id, nil
+}
+
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	cfg, err := config.LoadEnv()
 	if err != nil {
 		log.Fatalf("load .env: %v", err)
@@ -41,6 +59,18 @@ func main() {
 	service := sast.NewService(store, queue, scanner)
 	handler := sast.NewHandler(service)
 
+	dastStore, err := dast.NewStore(db)
+	dastService, err := dast.NewService(dastStore, rdb, nil, nil, cfg.DASTServer)
+	dastHandler, err := dast.NewHandler(dastService, dast.HandlerConfig{
+		UserID:       userID,
+		MaxBodyBytes: 32 << 20,
+	})
+	go func() {
+		if err := dastService.ExpireRun(ctx); err != nil {
+			log.Fatalf("DAST task cleanup stopped: %v", err)
+		}
+	}()
+
 	e := echo.New()
 
 	e.GET("/health", func(c *echo.Context) error {
@@ -50,8 +80,17 @@ func main() {
 	e.GET("/api/v1/scans", handler.ListScans)
 	e.GET("/api/v1/workers", handler.ListWorkers)
 	e.GET("/api/v1/scans/:id", handler.GetScan)
+	e.DELETE("/api/v1/scans/:id", handler.DeleteScan)
 	e.GET("/api/v1/scans/:id/findings", handler.GetScanFindings)
 	e.DELETE("/api/v1/scans/:id/findings", handler.DeleteScanFindings)
+	dastRoutes := e.Group("/api/v1/dast")
+	dastRoutes.GET("/assets", dastHandler.ListAssets)
+	dastRoutes.POST("/scans", dastHandler.CreateScan)
+	dastRoutes.GET("/scans", dastHandler.ListScans)
+	dastRoutes.GET("/scans/:id", dastHandler.GetScan)
+	dastRoutes.GET("/tasks/:id", dastHandler.GetTask)
+	dastRoutes.GET("/scans/:id/findings", dastHandler.ListFindings)
+	dastRoutes.GET("/workers", dastHandler.ListWorkers)
 	webui.Register(e)
 
 	port := 9000

@@ -93,21 +93,21 @@
             </div>
             <div v-show="openMenus.dast" class="pl-7 pr-1 py-0.5 space-y-0.5 text-xs">
               <div
-                @click="navTo('/dast/config')"
+                @click="navTo('/dast/assets')"
                 class="px-2.5 py-1.5 rounded-md cursor-pointer transition-colors"
                 :class="
-                  currentRoute === '/dast/config'
+                  currentRoute === '/dast/assets'
                     ? 'text-blue-600 bg-blue-50/60 font-medium'
                     : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
                 "
               >
-                扫描任务配置
+                资产列表
               </div>
               <div
                 @click="navTo('/dast/tasks')"
                 class="px-2.5 py-1.5 rounded-md cursor-pointer transition-colors"
                 :class="
-                  currentRoute === '/dast/tasks'
+                  currentRoute.startsWith('/dast/tasks')
                     ? 'text-blue-600 bg-blue-50/60 font-medium'
                     : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
                 "
@@ -172,23 +172,6 @@
               </span>
               <span v-if="idx < breadcrumbs.length - 1" class="text-slate-300">/</span>
             </template>
-          </div>
-
-          <!-- 顶部右侧用户信息 -->
-          <div class="flex items-center gap-4">
-            <!-- 铃铛通知 -->
-            <div class="relative cursor-pointer text-slate-400 hover:text-slate-600 transition-colors p-1">
-              <Bell class="w-4 h-4" />
-              <span class="absolute top-1 right-1 w-1.5 h-1.5 bg-rose-500 rounded-full ring-2 ring-white"></span>
-            </div>
-
-            <!-- 用户头像与名称 -->
-            <div class="flex items-center gap-2 pl-2 border-l border-slate-200">
-              <div class="w-7 h-7 rounded-full bg-slate-200 text-slate-600 font-bold flex items-center justify-center text-xs shadow-xs">
-                A
-              </div>
-              <span class="text-xs font-semibold text-slate-700">wsh</span>
-            </div>
           </div>
         </header>
 

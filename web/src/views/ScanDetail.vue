@@ -34,6 +34,18 @@
           <template #icon><RotateCw class="w-3 h-3 inline-block mr-1" /></template>
           刷新
         </a-button>
+        <a-popconfirm
+          title="确定要删除当前扫描任务及全部漏洞记录吗？"
+          ok-text="确认删除"
+          cancel-text="取消"
+          ok-type="danger"
+          @confirm="handleDeleteCurrentScan"
+        >
+          <a-button size="small" danger :loading="deleting">
+            <template #icon><Trash2 class="w-3 h-3 inline-block mr-1" /></template>
+            删除任务
+          </a-button>
+        </a-popconfirm>
       </div>
     </div>
 
@@ -148,7 +160,7 @@
           <div class="shrink-0 px-4 py-2 bg-slate-50/80 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2">
             <div class="flex items-center gap-2">
               <Code2 class="w-4 h-4 text-blue-500" />
-              <span class="font-bold text-xs text-slate-800">代码上下文 (Code Context)</span>
+              <span class="font-bold text-xs text-slate-800">代码上下文</span>
               <span
                 v-if="displayLocation"
                 class="font-mono text-xs font-semibold text-slate-800 bg-white px-2 py-0.5 rounded border border-slate-200/80"
@@ -160,12 +172,6 @@
                 class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700"
               >
                 污点链节点 #{{ activeStepIndex + 1 }}
-              </span>
-              <span
-                v-else
-                class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-rose-100 text-rose-700"
-              >
-                主隐患位置
               </span>
             </div>
 
@@ -211,8 +217,6 @@
             </div>
             <div v-else class="h-full flex flex-col items-center justify-center text-slate-500 text-xs py-8">
               <FileCode class="w-8 h-8 mb-2 opacity-50" />
-              <span>当前命中文件：{{ displayLocation?.uri || '—' }}（第 {{ displayLocation?.startLine || 1 }} 行）</span>
-              <span class="text-[11px] text-slate-600 mt-1">CodeQL SARIF 索引结果已定位，无内联代码片段缓存</span>
             </div>
           </div>
         </div>
@@ -223,13 +227,10 @@
           <div class="shrink-0 px-4 py-2 bg-slate-50/80 border-b border-slate-100 flex items-center justify-between">
             <div class="flex items-center gap-2">
               <Workflow class="w-4 h-4 text-indigo-500" />
-              <span class="font-bold text-xs text-slate-800">污点追踪链条 (Taint Propagation Flow)</span>
+              <span class="font-bold text-xs text-slate-800">污点链标记</span>
               <span class="text-xs text-slate-400 font-mono">
                 共 {{ taintSteps.length }} 个数据流节点
               </span>
-            </div>
-            <div class="text-[11px] text-slate-400">
-              点击节点可快速同步切换上方代码上下文
             </div>
           </div>
 
@@ -280,7 +281,7 @@
             <!-- 无污点流时的占位说明 -->
             <div v-else class="h-full flex flex-col items-center justify-center text-slate-400 text-xs py-6">
               <Workflow class="w-6 h-6 mb-1 text-slate-300" />
-              <span>当前隐患为局部模式匹配规则 (Pattern Match)，未产生跨过程/跨函数的污点流传播链条。</span>
+              <span>当前隐患为局部模式匹配规则，未产生跨过程/跨函数的污点流传播链条。</span>
               <span class="text-[11px] text-slate-400 mt-1" v-if="activeFinding?.related_locations?.length">
                 关联代码位置数：{{ activeFinding.related_locations.length }} 处
               </span>
@@ -299,6 +300,7 @@ import { message } from 'ant-design-vue'
 import {
   ArrowLeft,
   RotateCw,
+  Trash2,
   AlertCircle,
   AlertTriangle,
   Info,
@@ -317,6 +319,7 @@ const scan = ref<Scan | null>(null)
 const scanLoading = ref(false)
 const findings = ref<Finding[]>([])
 const findingsLoading = ref(false)
+const deleting = ref(false)
 
 const filterLevel = ref('')
 const selectedIndex = ref(0)
@@ -383,12 +386,15 @@ const displaySnippetLines = computed<CodeLine[]>(() => {
   const loc = displayLocation.value
   if (!loc || !loc.snippet) return []
   const rawLines = loc.snippet.split('\n')
-  const startNum = loc.startLine || 1
-  return rawLines.map((line, i) => ({
-    num: startNum + i,
-    text: line,
-    isTarget: i === 0, // 目标行高亮
-  }))
+  const startNum = (loc.snippetStartLine && loc.snippetStartLine > 0) ? loc.snippetStartLine : (loc.startLine || 1)
+  return rawLines.map((line, i) => {
+    const lineNum = startNum + i
+    return {
+      num: lineNum,
+      text: line,
+      isTarget: lineNum === loc.startLine || (rawLines.length === 1),
+    }
+  })
 })
 
 function selectFinding(idx: number) {
@@ -401,7 +407,7 @@ function selectStep(sIdx: number) {
 }
 
 function hasFlow(f: Finding) {
-  return f.code_flows && f.code_flows.length > 0 && f.code_flows[0].steps.length > 0
+  return Boolean(f.code_flows?.[0]?.steps?.length)
 }
 
 function formatLocation(loc?: Location) {
@@ -486,6 +492,19 @@ async function loadFindings() {
     message.error(e.message)
   } finally {
     findingsLoading.value = false
+  }
+}
+
+async function handleDeleteCurrentScan() {
+  deleting.value = true
+  try {
+    await api.deleteScan(id)
+    message.success(`任务 #${id} 已成功删除`)
+    router.push('/sast/scans')
+  } catch (e: any) {
+    message.error(e.message || '删除任务失败')
+  } finally {
+    deleting.value = false
   }
 }
 

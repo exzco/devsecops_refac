@@ -278,3 +278,19 @@ func (s *Store) DeleteFindings(ctx context.Context, scanID uint64) error {
 	}
 	return nil
 }
+
+func (s *Store) DeleteScan(ctx context.Context, scanID uint64) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `DELETE FROM sast_findings WHERE scan_id = $1`, scanID); err != nil {
+		return fmt.Errorf("delete findings for scan %d: %w", scanID, err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM sast_scans WHERE id = $1`, scanID); err != nil {
+		return fmt.Errorf("delete scan %d: %w", scanID, err)
+	}
+	return tx.Commit(ctx)
+}
