@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v5"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -463,7 +464,7 @@ func (s *Service) searchRepositories(ctx context.Context, id string) error {
 	return nil
 }
 
-// Run consumes durable jobs. A PostgreSQL advisory lock gives a single owner across server processes.
+// Run owns the scheduler; generation workers claim separate durable jobs.
 func (s *Service) Run(ctx context.Context) error {
 	conn, err := s.db.Acquire(ctx)
 	if err != nil {
@@ -478,14 +479,36 @@ func (s *Service) Run(ctx context.Context) error {
 		return errors.New("PoC job runner already active")
 	}
 	defer conn.Conn().Close(context.Background())
+	if _, err := conn.Exec(ctx, `
+		BEGIN;
+		DROP INDEX IF EXISTS poc_one_job;
+		CREATE UNIQUE INDEX IF NOT EXISTS poc_one_source_job ON poc_jobs ((true))
+			WHERE kind IN ('sync','search') AND status IN ('queued','running');
+		COMMIT;
+	`); err != nil {
+		return err
+	}
 	if _, err := conn.Exec(ctx, `UPDATE poc_jobs SET status='failed',error='服务重启，任务中断；可重新提交',finished_at=now() WHERE status='running'`); err != nil {
 		return err
 	}
+	workers, workerCtx := errgroup.WithContext(ctx)
+	for range 4 {
+		workers.Go(func() error { return s.consumeJobs(workerCtx, []string{"generate"}) })
+	}
+	workers.Go(func() error { return s.consumeJobs(workerCtx, []string{"sync", "search"}) })
+	return workers.Wait()
+}
+
+func (s *Service) consumeJobs(ctx context.Context, kinds []string) error {
 	for {
 		var id int64
 		var kind string
 		var raw json.RawMessage
-		err := conn.QueryRow(ctx, `UPDATE poc_jobs SET status='running' WHERE id=(SELECT id FROM poc_jobs WHERE status='queued' ORDER BY id LIMIT 1) RETURNING id,kind,input`).Scan(&id, &kind, &raw)
+		err := s.db.QueryRow(ctx, `WITH next_job AS (
+			SELECT id FROM poc_jobs WHERE status='queued' AND kind=ANY($1)
+			ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED
+		) UPDATE poc_jobs AS job SET status='running' FROM next_job
+		WHERE job.id=next_job.id RETURNING job.id,job.kind,job.input`, kinds).Scan(&id, &kind, &raw)
 		if errors.Is(err, pgx.ErrNoRows) {
 			if err := wait(ctx, 3*time.Second); err != nil {
 				return err
@@ -509,7 +532,7 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 			message = jobErr.Error()
 		}
-		if _, err := conn.Exec(ctx, `UPDATE poc_jobs SET status=$2,error=$3,finished_at=now() WHERE id=$1`, id, status, message); err != nil {
+		if _, err := s.db.Exec(ctx, `UPDATE poc_jobs SET status=$2,error=$3,finished_at=now() WHERE id=$1`, id, status, message); err != nil {
 			return err
 		}
 	}
@@ -558,8 +581,8 @@ func (s *Service) enqueue(ctx context.Context, kind string, input any) (int64, e
 	var id int64
 	err = s.db.QueryRow(ctx, `INSERT INTO poc_jobs(kind,input) VALUES($1,$2) RETURNING id`, kind, raw).Scan(&id)
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return 0, errors.New("已有任务正在排队或执行，请等待完成")
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "poc_one_source_job" {
+		return 0, errors.New("已有数据同步或搜索任务正在排队或执行，请等待完成")
 	}
 	return id, err
 }

@@ -1,7 +1,7 @@
 <template>
   <div class="h-full overflow-auto space-y-4">
     <div class="bg-white border border-slate-200 rounded-xl p-5 flex items-center justify-between gap-4">
-      <div><h1 class="font-bold text-slate-800">PoC 生成</h1><p class="text-xs text-slate-500 mt-1">根据 CVE 信息生成漏洞验证请求与响应判定条件</p></div>
+      <div><h1 class="font-bold text-slate-800">PoC 生成</h1><p class="text-xs text-slate-500 mt-1">分别生成产品指纹和漏洞探测模板</p></div>
       <div class="flex gap-2"><a-button @click="openSettings">API 配置</a-button><a-button @click="router.push('/dast/pocs')">规则列表</a-button></div>
     </div>
 
@@ -11,7 +11,7 @@
         <a-input v-model:value="cveID" placeholder="例如 CVE-2024-3094" class="!max-w-md" allow-clear @press-enter="loadContext()" />
         <a-button :loading="state.status==='loading'" :disabled="!validID" @click="loadContext()">读取信息</a-button>
         <a-button :disabled="!validID || state.status==='loading'" @click="loadContext(true)">更新来源</a-button>
-        <a-button type="primary" :loading="submitting" :disabled="state.status!=='ready' || state.data.cve.id!==normalizedID || !agent || !!agent.configuration_error" @click="generate">生成验证模板</a-button>
+        <a-button type="primary" :loading="submitting" :disabled="state.status!=='ready' || state.data.cve.id!==normalizedID || !agent || !!agent.configuration_error" @click="generate">生成 PoC</a-button>
       </div>
       <div class="flex flex-wrap justify-between gap-2 text-xs mt-3">
         <span class="text-slate-400">优先读取已收集的信息，缺失时按编号获取。点击生成后才调用 AI。</span>
@@ -37,12 +37,18 @@
     <PocJobs ref="jobs" @completed="loadResults" />
     <div class="bg-white border border-slate-200 rounded-xl p-5">
       <div class="flex justify-between mb-3"><h2 class="font-semibold">生成结果</h2><a-button size="small" @click="loadResults">刷新</a-button></div>
-      <a-table :columns="columns" :data-source="results" row-key="id" :pagination="{pageSize:10}">
+      <a-table :columns="columns" :data-source="generationRows" row-key="id" :pagination="{pageSize:10}" :scroll="{x:900}">
         <template #bodyCell="{column,record}">
-          <template v-if="column.key==='product'">{{record.spec.name || '尚未识别'}}</template>
-          <template v-if="column.key==='type'">{{checkTypes[record.spec.check_type] || '历史记录未标注'}}</template>
-          <template v-if="column.key==='status'"><a-tag :color="record.spec.status==='draft'?'blue':'orange'">{{record.spec.status==='draft'?'待验证草稿':'信息不足'}}</a-tag><div class="text-xs text-slate-500 mt-1">{{record.spec.reason}}</div></template>
-          <template v-if="column.key==='action'"><a-space><a-button size="small" @click="viewResult(record as any)">查看</a-button><a-button size="small" :disabled="!record.template" @click="download(record as any)">下载</a-button></a-space></template>
+          <template v-if="column.key==='cve'"><span class="whitespace-nowrap">{{record.cve_id}}</span><div class="text-xs text-slate-400 mt-1">{{new Date(record.created_at).toLocaleString()}}</div></template>
+          <template v-if="column.key==='product'">{{record.spec.name || '尚未识别'}}<div v-if="record.spec.version===1" class="text-xs text-slate-400 mt-1">历史单模板记录</div></template>
+          <template v-if="column.key==='fingerprint' || column.key==='vulnerability'">
+            <template v-if="record.outcomes[column.key]">
+              <div class="flex items-center gap-2"><a-tag :color="record.outcomes[column.key].status==='draft'?'blue':'orange'">{{record.outcomes[column.key].status==='draft'?'已生成 · 待验证':'信息不足'}}</a-tag><a-button v-if="record.templates[column.key]" size="small" @click="download(record.cve_id,record.outcomes[column.key].kind,record.templates[column.key])">下载 YAML</a-button></div>
+              <ul v-if="record.outcomes[column.key].missing_information.length" class="list-disc pl-4 text-xs text-slate-600 mt-2 space-y-1"><li v-for="item in record.outcomes[column.key].missing_information" :key="item">{{item}}</li></ul>
+            </template>
+            <span v-else class="text-xs text-slate-400">历史记录未生成此项</span>
+          </template>
+          <template v-if="column.key==='action'"><a-button size="small" @click="viewResult(record.id)">查看</a-button></template>
         </template>
       </a-table>
     </div>
@@ -56,11 +62,16 @@
         <p v-if="agent?.configuration_error" class="text-xs text-amber-600">{{agent.configuration_error}}</p>
       </a-form>
     </a-modal>
-    <a-modal :open="!!current" title="生成结果" width="900px" :footer="null" @cancel="current=undefined">
-      <p class="text-sm my-3">{{current?.spec.reason}}</p>
-      <pre class="text-xs whitespace-pre-wrap bg-slate-50 p-4 max-h-96 overflow-auto">{{current?.template || '已收集的信息不足以生成模板，可同步更多信息后重新提交。'}}</pre>
-      <a-button v-if="current?.template" class="mt-3" type="primary" @click="download(current)">下载模板</a-button>
-      <details class="mt-4"><summary class="text-xs cursor-pointer text-slate-500">高级：修改生成规格</summary><a-textarea v-model:value="specText" :rows="14" class="mt-3 font-mono" /><a-button class="mt-3" :loading="savingSpec" @click="saveSpec">保存并重新渲染</a-button></details>
+    <a-modal :open="!!current" title="生成结果" width="1000px" :footer="null" @cancel="currentID=undefined">
+      <template v-if="current">
+        <section v-for="result in current.outcomes" :key="result.kind" class="border border-slate-200 rounded-lg p-4 mt-4">
+          <div class="flex justify-between items-center"><h3 class="font-medium">{{checkTypes[result.kind]}}</h3><a-tag :color="result.status==='draft'?'blue':'orange'">{{result.status==='draft'?'已生成 · 待验证':'信息不足'}}</a-tag></div>
+          <p class="text-sm text-slate-600 my-3 whitespace-pre-wrap">{{result.reason}}</p>
+          <div v-if="result.missing_information.length" class="text-sm text-amber-700 mb-3"><p class="font-medium mb-1">缺少的信息</p><ul class="list-disc pl-5"><li v-for="item in result.missing_information" :key="item">{{item}}</li></ul></div>
+          <template v-if="result.yaml"><pre class="text-xs whitespace-pre-wrap bg-slate-50 p-4 max-h-96 overflow-auto">{{result.yaml}}</pre><a-button class="mt-3" @click="download(current.cve_id,result.kind,result.yaml)">下载 YAML</a-button></template>
+        </section>
+        <details class="mt-4"><summary class="text-xs cursor-pointer text-slate-500">高级：修改生成规格</summary><a-textarea v-model:value="specText" :rows="14" class="mt-3 font-mono" /><a-button class="mt-3" :loading="savingSpec" @click="saveSpec">保存并重新渲染</a-button></details>
+      </template>
     </a-modal>
   </div>
 </template>
@@ -69,8 +80,10 @@ import {computed,onMounted,onUnmounted,reactive,ref,watch} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
 import {message} from 'ant-design-vue'
 import PocJobs from '@/components/PocJobs.vue'
-import {poc,type AgentSettings,type GenerationContext,type Generation} from '@/api/poc'
-const router=useRouter(),route=useRoute(),cveID=ref(''),agent=ref<AgentSettings>(),results=ref<Generation[]>([]),current=ref<Generation>()
+import {poc,type AgentSettings,type GenerationContext,type Generation,type PoCKind} from '@/api/poc'
+const router=useRouter(),route=useRoute(),cveID=ref(''),agent=ref<AgentSettings>(),results=ref<Generation[]>([]),currentID=ref<number>()
+const generationRows=computed(()=>results.value.map(g=>({...g,outcomes:Object.fromEntries(g.spec.results.map(r=>[r.kind,{...r,yaml:g.templates[r.kind]}]))})))
+const current=computed(()=>generationRows.value.find(g=>g.id===currentID.value))
 const specText=ref(''),savingSpec=ref(false)
 const state=ref<{status:'idle'}|{status:'loading'}|{status:'ready';data:GenerationContext}|{status:'error';message:string}>({status:'idle'})
 const jobs=ref<InstanceType<typeof PocJobs>>(),submitting=ref(false),settingsOpen=ref(false),savingSettings=ref(false)
@@ -79,8 +92,8 @@ const protocols=[{value:'openai',label:'OpenAI 兼容'},{value:'anthropic',label
 const baseExamples:Record<string,string>={openai:'https://api.openai.com/v1',anthropic:'https://api.anthropic.com/v1',gemini:'https://generativelanguage.googleapis.com/v1beta'}
 const normalizedID=computed(()=>cveID.value.trim().toUpperCase()),validID=computed(()=>/^CVE-\d{4}-\d{4,}$/.test(normalizedID.value))
 const links=computed(()=>{if(state.value.status!=='ready')return [];const c=state.value.data.cve;return [...new Map([...(c.manual.pocs??[]),...c.discovered,...(c.sources['CVEProject/cvelistV5']?.references??[])].map(l=>[l.url,l])).values()]})
-const checkTypes:Record<string,string>={fingerprint:'产品指纹',vulnerability:'漏洞验证'}
-const columns=[{title:'CVE',dataIndex:'cve_id'},{title:'产品',key:'product'},{title:'类型',key:'type',width:120},{title:'状态',key:'status'},{title:'操作',key:'action',width:160}]
+const checkTypes:Record<PoCKind,string>={fingerprint:'指纹探测',vulnerability:'漏洞探测',legacy:'历史模板（类型未标注）'}
+const columns=[{title:'CVE / 生成时间',key:'cve',width:190},{title:'产品',key:'product',width:170},{title:'指纹探测',key:'fingerprint'},{title:'漏洞探测',key:'vulnerability'},{title:'操作',key:'action',width:90}]
 let timer:ReturnType<typeof setTimeout>|undefined
 let request=0
 watch(normalizedID,()=>{clearTimeout(timer);request++;state.value={status:'idle'};if(validID.value)timer=setTimeout(loadContext,400)})
@@ -89,10 +102,10 @@ async function generate(){if(state.value.status!=='ready')return;submitting.valu
 function openSettings(){if(!agent.value){message.error('API 配置信息尚未加载');return}Object.assign(settings,{protocol:agent.value.protocol,base_url:agent.value.base_url,model:agent.value.model,api_key:''});settingsOpen.value=true}
 async function saveSettings(){savingSettings.value=true;try{agent.value=await poc.saveAgent(settings);settings.api_key='';settingsOpen.value=false;message.success('API 配置已保存并生效')}catch(e:any){message.error(e.message)}finally{savingSettings.value=false}}
 watch(settingsOpen,open=>{if(!open)settings.api_key=''})
-function viewResult(g:Generation){current.value=g;specText.value=JSON.stringify(g.spec,null,2)}
-async function saveSpec(){if(!current.value)return;const id=current.value.id;savingSpec.value=true;try{await poc.saveSpec(id,JSON.parse(specText.value));results.value=await poc.generations();current.value=results.value.find(g=>g.id===id);message.success('规格已保存')}catch(e:any){message.error(e.message)}finally{savingSpec.value=false}}
+function viewResult(id:number){currentID.value=id;if(!current.value)throw new Error('生成记录不存在');specText.value=JSON.stringify(current.value.spec,null,2)}
+async function saveSpec(){if(!current.value)return;const id=current.value.id;savingSpec.value=true;try{await poc.saveSpec(id,JSON.parse(specText.value));results.value=await poc.generations();message.success('规格已保存')}catch(e:any){message.error(e.message)}finally{savingSpec.value=false}}
 async function loadResults(){try{results.value=await poc.generations()}catch(e:any){message.error(e.message)}}
-function download(g:Generation){const url=URL.createObjectURL(new Blob([g.template],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=g.cve_id+'-'+(g.spec.check_type??'detect')+'.json';a.click();URL.revokeObjectURL(url)}
+function download(cve:string,kind:PoCKind,content:string){const url=URL.createObjectURL(new Blob([content],{type:'application/yaml'}));const a=document.createElement('a');a.href=url;a.download=cve.toLowerCase()+'-'+(kind==='vulnerability'?'verify':kind)+'.yaml';a.click();URL.revokeObjectURL(url)}
 onMounted(async()=>{if(typeof route.query.cve==='string')cveID.value=route.query.cve;try{[agent.value,results.value]=await Promise.all([poc.agent(),poc.generations()])}catch(e:any){message.error(e.message)}})
 onUnmounted(()=>{clearTimeout(timer);request++})
 </script>

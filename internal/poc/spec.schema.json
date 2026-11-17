@@ -1,18 +1,437 @@
 {
- "$schema":"https://json-schema.org/draft/2020-12/schema",
- "title":"HTTP vulnerability verification specification", "type":"object", "additionalProperties":false,
- "required":["status","check_type","reason","product_key","name","version_range","probes","evidence"],
- "properties":{
-  "status":{"type":"string","enum":["draft","needs-evidence"]},
-  "check_type":{"type":"string","enum":["fingerprint","vulnerability"],"description":"Fingerprint identifies a product; vulnerability matches vulnerability-specific behavior. Do not mix them in one specification."},
-  "reason":{"type":"string"}, "product_key":{"type":"string"}, "name":{"type":"string"}, "version_range":{"type":"string"},
-  "probes":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["method","path","headers","body","part","words","regex","version_regex"],"properties":{
-   "method":{"type":"string","enum":["GET","HEAD","POST","PUT","PATCH","DELETE","OPTIONS"]},
-   "path":{"type":"string","pattern":"^/[^\\r\\n{}]*$","description":"Relative HTTP endpoint. Requests are independent; no cross-request variables."},
-   "headers":{"type":"object","additionalProperties":{"type":"string"}},"body":{"type":"string"},
-   "part":{"type":"string","enum":["body","header"]},"words":{"type":"array","items":{"type":"string","minLength":1}},
-   "regex":{"type":"array","items":{"type":"string","minLength":1},"description":"Go/RE2 response patterns. All words and all regex patterns must match."},"version_regex":{"type":"string"}
-  },"anyOf":[{"properties":{"words":{"minItems":1}}},{"properties":{"regex":{"minItems":1}}}]}},
-  "evidence":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["source","text"],"properties":{"source":{"type":"string"},"text":{"type":"string"}}}}
- }
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CVE fingerprint and vulnerability templates",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 2
+    },
+    "product_key": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "source",
+          "text"
+        ]
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/result"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    }
+  },
+  "required": [
+    "version",
+    "product_key",
+    "name",
+    "evidence",
+    "results"
+  ],
+  "$defs": {
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "fingerprint",
+            "vulnerability"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "needs-evidence"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "missing_information": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "template": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/template"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "status",
+        "reason",
+        "missing_information",
+        "template"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "draft"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "template": {
+                "$ref": "#/$defs/template"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "template": {
+                "type": "null"
+              },
+              "missing_information": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "template": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^cve-[0-9]{4}-[0-9]{4,}-(fingerprint|verify)$"
+        },
+        "info": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "author": {
+              "type": "string",
+              "minLength": 1
+            },
+            "severity": {
+              "type": "string",
+              "enum": [
+                "info",
+                "low",
+                "medium",
+                "high",
+                "critical",
+                "unknown"
+              ]
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reference": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tags": {
+              "type": "string"
+            },
+            "metadata": {
+              "type": "object"
+            },
+            "classification": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "cve-id": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "cwe-id": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "name",
+            "author",
+            "severity",
+            "description"
+          ]
+        },
+        "http": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "GET",
+                  "HEAD",
+                  "POST",
+                  "PUT",
+                  "PATCH",
+                  "DELETE",
+                  "OPTIONS"
+                ]
+              },
+              "path": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^\\{\\{(BaseURL|RootURL)\\}\\}(/|$)"
+                },
+                "minItems": 1
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "body": {
+                "type": "string"
+              },
+              "redirects": {
+                "type": "boolean"
+              },
+              "max-redirects": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "matchers-condition": {
+                "type": "string",
+                "enum": [
+                  "and",
+                  "or"
+                ]
+              },
+              "matchers": {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "type": {
+                          "const": "word"
+                        },
+                        "words": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "minItems": 1
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "negative": {
+                          "type": "boolean"
+                        },
+                        "part": {
+                          "type": "string",
+                          "enum": [
+                            "body",
+                            "header",
+                            "all"
+                          ]
+                        },
+                        "condition": {
+                          "type": "string",
+                          "enum": [
+                            "and",
+                            "or"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "words",
+                        "part",
+                        "condition"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "type": {
+                          "const": "regex"
+                        },
+                        "regex": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "minItems": 1
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "negative": {
+                          "type": "boolean"
+                        },
+                        "part": {
+                          "type": "string",
+                          "enum": [
+                            "body",
+                            "header",
+                            "all"
+                          ]
+                        },
+                        "condition": {
+                          "type": "string",
+                          "enum": [
+                            "and",
+                            "or"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "regex",
+                        "part",
+                        "condition"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "type": {
+                          "const": "status"
+                        },
+                        "status": {
+                          "type": "array",
+                          "items": {
+                            "type": "integer",
+                            "minimum": 100,
+                            "maximum": 599
+                          },
+                          "minItems": 1
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "negative": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "status"
+                      ]
+                    }
+                  ]
+                },
+                "minItems": 1
+              },
+              "extractors": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": {
+                      "const": "regex"
+                    },
+                    "part": {
+                      "type": "string",
+                      "enum": [
+                        "body",
+                        "header",
+                        "all"
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "regex": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 1
+                    },
+                    "group": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "part",
+                    "regex"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "method",
+              "path",
+              "matchers-condition",
+              "matchers"
+            ]
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "id",
+        "info",
+        "http"
+      ]
+    }
+  }
 }

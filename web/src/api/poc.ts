@@ -5,8 +5,10 @@ export interface CVE { id: string; sources: Record<string, any>; discovered: Lin
 export interface Job { id: number; kind: string; status: string; progress: string; error: string }
 export interface Evidence { source: string; text: string }
 export interface Product { key: string; name: string; fingerprints: string; version_endpoints: string; evidence: Evidence[] }
-export interface Spec { status: string; check_type: 'fingerprint' | 'vulnerability'; reason: string; product_key: string; name: string; version_range: string; probes: { method: string; path: string; headers: Record<string, string>; body: string; part: string; words: string[]; regex: string[]; version_regex: string }[]; evidence: Evidence[] }
-export interface Generation { id: number; cve_id: string; product_key: string | null; spec: Spec; template: string }
+export type PoCKind = 'fingerprint' | 'vulnerability' | 'legacy'
+export interface PoCResult { kind: PoCKind; status: 'draft' | 'needs-evidence'; reason: string; missing_information: string[]; template: Record<string, unknown> | null }
+export interface Spec { version: 1 | 2; product_key: string; name: string; results: PoCResult[]; evidence: Evidence[] }
+export interface Generation { id: number; cve_id: string; spec: Spec; templates: Partial<Record<PoCKind, string>>; created_at: string }
 export interface GenerationContext { cve: CVE; description: string; products: Product[]; materials: Evidence[]; notices: string[] }
 export interface AgentSettings { protocol: string; base_url: string; model: string; has_api_key: boolean; configuration_error: string; schema: unknown }
 export interface CatalogParams {
@@ -41,7 +43,7 @@ export const poc = {
   context: (id: string) => http.get<GenerationContext>(`/dast/poc-context/${encodeURIComponent(id)}`, { timeout: 35000 }).then(r => r.data),
   refreshContext: (id: string) => http.post<GenerationContext>(`/dast/poc-context/${encodeURIComponent(id)}/refresh`, {}, { timeout: 35000 }).then(r => r.data),
   saveAgent: (settings: { protocol: string; base_url: string; model: string; api_key: string }) => http.put<AgentSettings>('/dast/poc-agent', settings).then(r => r.data),
-  generate: (ids: string[]) => http.post('/dast/poc-generate', { ids }),
+  generate: (ids: string[]) => http.post<number[]>('/dast/poc-generate', { ids }),
   generations: () => http.get<Generation[]>('/dast/poc-generations').then(r => r.data),
   saveSpec: (id: number, spec: Spec) => http.put(`/dast/poc-generations/${id}`, spec),
 }
