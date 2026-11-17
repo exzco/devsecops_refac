@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -19,6 +20,48 @@ func NewStore(db *pgxpool.Pool) (*Store, error) {
 		return nil, errors.New("DAST database pool is required")
 	}
 	return &Store{db: db}, nil
+}
+
+func (s *Store) CreateAsset(ctx context.Context, asset Asset) error {
+	services, err := json.Marshal(asset.RegisteredServices)
+	if err != nil {
+		return fmt.Errorf("encode registered services: %w", err)
+	}
+	_, err = s.db.Exec(ctx, `INSERT INTO dast_assets
+		(source_id,cmdb_id,host,cluster_id,network_zone,business_id,owner,registered_services)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, asset.SourceID, asset.CMDBID, asset.Host,
+		asset.ClusterID, asset.NetworkZone, asset.BusinessID, asset.Owner, services)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return fmt.Errorf("asset %q already exists in source %q", asset.CMDBID, asset.SourceID)
+		}
+		return fmt.Errorf("create DAST asset: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListAssets(ctx context.Context) ([]Asset, error) {
+	rows, err := s.db.Query(ctx, `SELECT source_id,cmdb_id,host,cluster_id,network_zone,
+		business_id,owner,registered_services FROM dast_assets ORDER BY source_id,cmdb_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list DAST assets: %w", err)
+	}
+	defer rows.Close()
+	assets := make([]Asset, 0)
+	for rows.Next() {
+		var asset Asset
+		var services []byte
+		if err := rows.Scan(&asset.SourceID, &asset.CMDBID, &asset.Host, &asset.ClusterID,
+			&asset.NetworkZone, &asset.BusinessID, &asset.Owner, &services); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(services, &asset.RegisteredServices); err != nil {
+			return nil, fmt.Errorf("decode registered services: %w", err)
+		}
+		assets = append(assets, asset)
+	}
+	return assets, rows.Err()
 }
 
 const scanColumns = `s.id, s.created_by, s.created_at,

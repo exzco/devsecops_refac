@@ -14,10 +14,6 @@
           <template #icon><RotateCw class="w-3.5 h-3.5 inline-block mr-1" /></template>
           刷新
         </a-button>
-        <a-button type="primary" size="middle" @click="router.push('/dast/assets')">
-          <template #icon><Plus class="w-3.5 h-3.5 inline-block mr-1" /></template>
-          从资产发起扫描
-        </a-button>
       </div>
     </div>
 
@@ -92,7 +88,7 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import dayjs from 'dayjs'
-import { Crosshair, Plus, RotateCw } from 'lucide-vue-next'
+import { Crosshair, RotateCw } from 'lucide-vue-next'
 import { api } from '@/api'
 import type { DastScan } from '@/types'
 

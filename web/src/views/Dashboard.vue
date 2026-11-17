@@ -62,7 +62,7 @@
           </div>
         </div>
         <div v-if="onlineWorkers > 0" class="text-xs text-emerald-600 mt-4 flex items-center gap-1 font-medium">
-          <CheckCircle2 class="w-3.5 h-3.5" /> 全部节点就绪 (SAST: {{ onlineWorkers }} | DAST: 0)
+          <CheckCircle2 class="w-3.5 h-3.5" /> 在线节点 (SAST: {{ onlineSastWorkers }} | DAST: {{ onlineDastWorkers }})
         </div>
         <div v-else class="text-xs text-amber-600 mt-4 flex items-center gap-1 font-medium">
           <AlertCircle class="w-3.5 h-3.5" /> 暂无在线 Worker (SAST: 0 | DAST: 0)
@@ -135,25 +135,25 @@
         <!-- 真实 Worker 节点 -->
         <div
           v-for="w in filteredWorkers"
-          :key="w.worker_id"
+          :key="`${w.kind}:${w.kind === 'SAST' ? w.status.worker_id : w.status.instance_id}`"
           class="border border-slate-200/90 rounded-xl p-5 bg-white shadow-2xs transition-all hover:border-slate-300"
         >
           <!-- 节点元信息头条 -->
           <div class="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
             <div class="flex items-center flex-wrap gap-2.5">
               <span class="px-2.5 py-0.5 rounded text-xs font-semibold bg-indigo-50 text-indigo-600 tracking-wider">
-                SAST WORKER
+                {{ w.kind }} WORKER
               </span>
-              <span class="font-bold text-slate-800 text-sm font-mono">{{ w.worker_id }}</span>
+              <span class="font-bold text-slate-800 text-sm font-mono">{{ w.kind === 'SAST' ? w.status.worker_id : w.status.instance_id }}</span>
               <span
                 class="px-2 py-0.5 rounded-full text-xs font-medium flex items-center gap-1"
-                :class="w.online ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 'bg-slate-100 text-slate-500'"
+                :class="w.status.online ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 'bg-slate-100 text-slate-500'"
               >
-                <span class="w-1.5 h-1.5 rounded-full" :class="w.online ? 'bg-emerald-500' : 'bg-slate-400'"></span>
-                {{ w.online ? '在线' : '掉线' }}
+                <span class="w-1.5 h-1.5 rounded-full" :class="w.status.online ? 'bg-emerald-500' : 'bg-slate-400'"></span>
+                {{ w.status.online ? '在线' : '掉线' }}
               </span>
               <span
-                v-if="w.online"
+                v-if="w.status.online"
                 class="px-2 py-0.5 rounded text-xs border border-teal-200 text-teal-600 bg-teal-50/40 font-medium"
               >
                 ✓ 环境就绪
@@ -166,18 +166,15 @@
               </span>
             </div>
             <div class="text-xs text-slate-500 font-mono flex items-center gap-3 flex-wrap">
-              <span v-if="w.hostname">主机: {{ w.hostname }}</span>
-              <span v-if="w.pid">PID: {{ w.pid }}</span>
-              <span v-if="w.arch">架构: {{ w.arch }} ({{ w.num_cpu || 4 }}核)</span>
-              <span>最后心跳: {{ formatLastSeen(w.last_seen_at) }}</span>
+              <span>最后心跳: {{ formatLastSeen(w.status.last_seen_at) }}</span>
             </div>
           </div>
 
           <!-- 依赖与外部工具核验内容 -->
-          <div class="pt-3">
+          <div v-if="w.kind === 'SAST'" class="pt-3">
             <div class="flex items-center justify-between text-xs text-slate-500 font-medium mb-3">
               <span>依赖与网络核验</span>
-              <span v-if="w.work_root" class="font-mono text-slate-400 text-[11px]">工作区: {{ w.work_root }}</span>
+              <span v-if="w.status.work_root" class="font-mono text-slate-400 text-[11px]">工作区: {{ w.status.work_root }}</span>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -185,14 +182,14 @@
               <div class="border border-slate-200/70 rounded-lg p-3 bg-slate-50/50">
                 <div class="flex items-center justify-between">
                   <div class="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
-                    <CheckCircle2 v-if="w.codeql_ok !== false" class="w-3.5 h-3.5 text-teal-500" />
+                    <CheckCircle2 v-if="w.status.codeql_ok" class="w-3.5 h-3.5 text-teal-500" />
                     <AlertCircle v-else class="w-3.5 h-3.5 text-rose-500" />
                     <span>CodeQL 分析引擎</span>
                   </div>
                   <span class="text-[10px] text-slate-400 bg-slate-200/60 px-1.5 py-0.5 rounded">强依赖</span>
                 </div>
-                <div class="text-[11px] text-slate-500 mt-1.5 font-mono truncate" :title="w.codeql_path">
-                  {{ w.codeql_path || '/home/wsh/sdk/codeql/codeql' }} ({{ w.codeql_ok !== false ? '已就绪' : '未检测到' }})
+                <div class="text-[11px] text-slate-500 mt-1.5 font-mono truncate" :title="w.status.codeql_path">
+                  {{ w.status.codeql_path }} ({{ w.status.codeql_ok ? '已就绪' : '未检测到' }})
                 </div>
               </div>
 
@@ -225,6 +222,20 @@
               </div>
             </div>
           </div>
+          <div v-else class="pt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div class="border border-slate-200/70 rounded-lg p-3 bg-slate-50/50">
+              <div class="text-xs font-semibold text-slate-800">集群</div>
+              <div class="text-[11px] text-slate-500 mt-1.5 font-mono">{{ w.status.cluster_id }}</div>
+            </div>
+            <div class="border border-slate-200/70 rounded-lg p-3 bg-slate-50/50">
+              <div class="text-xs font-semibold text-slate-800">网络区域</div>
+              <div class="text-[11px] text-slate-500 mt-1.5 font-mono">{{ w.status.network_zone }}</div>
+            </div>
+            <div class="border border-slate-200/70 rounded-lg p-3 bg-slate-50/50">
+              <div class="text-xs font-semibold text-slate-800">模板版本</div>
+              <div class="text-[11px] text-slate-500 mt-1.5 font-mono">{{ w.status.template_version }}</div>
+            </div>
+          </div>
         </div>
 
         <!-- 节点列表为空提示 -->
@@ -234,10 +245,10 @@
         >
           <Server class="w-8 h-8 text-slate-300 mx-auto mb-2" />
           <div class="text-slate-500 text-sm font-medium">
-            {{ workers.length === 0 ? '暂无在线的 SAST Worker 节点' : '没有符合当前筛选状态的 Worker 节点' }}
+            {{ workers.length === 0 ? '暂无注册的 Worker 节点' : '没有符合当前筛选状态的 Worker 节点' }}
           </div>
           <div class="text-xs text-slate-400 mt-1">
-            {{ workers.length === 0 ? '可在终端运行 ./bin/worker-sast 启动分布式扫描节点' : '可尝试切换上方“全部 / 在线 / 掉线”筛选器' }}
+            {{ workers.length === 0 ? '请启动 SAST 或 DAST Worker' : '可尝试切换上方“全部 / 在线 / 掉线”筛选器' }}
           </div>
         </div>
       </div>
@@ -262,22 +273,26 @@ import {
   RotateCw,
 } from 'lucide-vue-next'
 import { api } from '@/api'
-import type { Scan, WorkerStatus } from '@/types'
+import type { Scan, WorkerStatus, DastWorkerStatus } from '@/types'
 
 dayjs.extend(relativeTime)
 dayjs.locale('zh-cn')
 
 const loading = ref(false)
 const scans = ref<Scan[]>([])
-const workers = ref<WorkerStatus[]>([])
+type DashboardWorker =
+  | { kind: 'SAST'; status: WorkerStatus }
+  | { kind: 'DAST'; status: DastWorkerStatus }
+
+const workers = ref<DashboardWorker[]>([])
 const workerFilter = ref<'all' | 'online' | 'offline'>('all')
 
 const filteredWorkers = computed(() => {
   if (workerFilter.value === 'online') {
-    return workers.value.filter((w) => w.online)
+    return workers.value.filter((w) => w.status.online)
   }
   if (workerFilter.value === 'offline') {
-    return workers.value.filter((w) => !w.online)
+    return workers.value.filter((w) => !w.status.online)
   }
   return workers.value
 })
@@ -299,15 +314,18 @@ const totalWorkers = computed(() => {
 })
 
 const onlineWorkers = computed(() => {
-  return workers.value.filter((w) => w.online).length
+  return workers.value.filter((w) => w.status.online).length
 })
 
+const onlineSastWorkers = computed(() => workers.value.filter((w) => w.kind === 'SAST' && w.status.online).length)
+const onlineDastWorkers = computed(() => workers.value.filter((w) => w.kind === 'DAST' && w.status.online).length)
+
 const offlineWorkers = computed(() => {
-  return workers.value.filter((w) => !w.online).length
+  return workers.value.filter((w) => !w.status.online).length
 })
 
 function formatLastSeen(timeStr: string | null) {
-  if (!timeStr) return '刚刚'
+  if (!timeStr) return '未知'
   const diffSec = Math.abs(dayjs().diff(dayjs(timeStr), 'second'))
   if (diffSec < 15) return '刚刚'
   return dayjs(timeStr).fromNow()
@@ -316,17 +334,21 @@ function formatLastSeen(timeStr: string | null) {
 async function fetchData() {
   loading.value = true
   try {
-    const [scanData, workerData] = await Promise.all([
-      api.listScans().catch(() => []),
-      api.listWorkers().catch(() => []),
+    const [scanData, sastWorkers, dastWorkers] = await Promise.all([
+      api.listScans(),
+      api.listWorkers(),
+      api.listDastWorkers(),
     ])
     scans.value = scanData
-    workers.value = workerData
+    workers.value = [
+      ...sastWorkers.map((status): DashboardWorker => ({ kind: 'SAST', status })),
+      ...dastWorkers.map((status): DashboardWorker => ({ kind: 'DAST', status })),
+    ]
 
     // 统计前几个 scan 的 findings
     if (scanData.length > 0) {
       const topScans = scanData.slice(0, 10)
-      const findingPromises = topScans.map((s) => api.getScanFindings(s.id).catch(() => []))
+      const findingPromises = topScans.map((s) => api.getScanFindings(s.id))
       const findingsList = await Promise.all(findingPromises)
       findingCount.value = findingsList.reduce((acc, cur) => acc + cur.length, 0)
     } else {

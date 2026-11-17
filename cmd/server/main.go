@@ -15,6 +15,7 @@ import (
 	"devsecops/internal/config"
 	"devsecops/internal/dast"
 	"devsecops/internal/infra"
+	"devsecops/internal/poc"
 	"devsecops/internal/sast"
 	"devsecops/internal/webui"
 	"github.com/labstack/echo/v5"
@@ -60,11 +61,20 @@ func main() {
 	handler := sast.NewHandler(service)
 
 	dastStore, err := dast.NewStore(db)
-	dastService, err := dast.NewService(dastStore, rdb, nil, nil, cfg.DASTServer)
+	if err != nil {
+		log.Fatal(err)
+	}
+	dastService, err := dast.NewService(dastStore, rdb, nil, dastStore, cfg.DASTServer)
+	if err != nil {
+		log.Fatal(err)
+	}
 	dastHandler, err := dast.NewHandler(dastService, dast.HandlerConfig{
 		UserID:       userID,
 		MaxBodyBytes: 32 << 20,
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
 	go func() {
 		if err := dastService.ExpireRun(ctx); err != nil {
 			log.Fatalf("DAST task cleanup stopped: %v", err)
@@ -85,12 +95,34 @@ func main() {
 	e.DELETE("/api/v1/scans/:id/findings", handler.DeleteScanFindings)
 	dastRoutes := e.Group("/api/v1/dast")
 	dastRoutes.GET("/assets", dastHandler.ListAssets)
+	dastRoutes.POST("/assets", dastHandler.CreateAsset)
 	dastRoutes.POST("/scans", dastHandler.CreateScan)
 	dastRoutes.GET("/scans", dastHandler.ListScans)
 	dastRoutes.GET("/scans/:id", dastHandler.GetScan)
 	dastRoutes.GET("/tasks/:id", dastHandler.GetTask)
 	dastRoutes.GET("/scans/:id/findings", dastHandler.ListFindings)
 	dastRoutes.GET("/workers", dastHandler.ListWorkers)
+	
+	// poc 路由注册
+	pocService := poc.New(db, rdb, poc.Config{
+		GitHubToken: os.Getenv("GITHUB_TOKEN"), NVDKey: os.Getenv("NVD_API_KEY"),
+		Agent: infra.AgentConfig{Protocol: os.Getenv("AI_PROTOCOL"), BaseURL: os.Getenv("AI_BASE_URL"), Model: os.Getenv("AI_MODEL"), APIKey: os.Getenv("AI_API_KEY")},
+	})
+	pocRoutes := e.Group("/api/v1/dast", func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c *echo.Context) error {
+			if _, err := userID(c.Request()); err != nil {
+				return c.JSON(http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			}
+			return next(c)
+		}
+	})
+	pocService.Register(pocRoutes)
+
+	go func() {
+		if err := pocService.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Fatalf("PoC jobs stopped: %v", err)
+		}
+	}()
 	webui.Register(e)
 
 	port := 9000

@@ -43,9 +43,10 @@ export default createRouter({
     },
     {
       path: '/dast/pocs',
-      component: () => import('@/views/PlaceholderView.vue'),
+      component: () => import('@/views/PocRules.vue'),
       meta: { title: 'PoC 规则管理', breadcrumbs: ['平台首页', 'DAST 动态扫描', 'PoC 规则管理'] },
     },
+    { path: '/dast/poc-generate', component: () => import('@/views/PocGenerate.vue'), meta: { title: 'PoC 生成', breadcrumbs: ['平台首页', 'DAST 动态扫描', 'PoC 生成'] } },
     // SCA
     {
       path: '/sca/tasks',

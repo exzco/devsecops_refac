@@ -15,7 +15,7 @@ import type {
   DastWorkerStatus,
 } from '@/types'
 
-const http = axios.create({ baseURL: '/api/v1', timeout: 10_000 })
+export const http = axios.create({ baseURL: '/api/v1', timeout: 30_000 })
 
 // DAST 的接口按调用方隔离数据，请求必须带上身份；接入统一登录后改为读取令牌。
 const DAST_USER_ID = 'web-console'
@@ -130,6 +130,8 @@ export const api = {
   // DAST
   listDastAssets: (filter: DastAssetFilter = {}) =>
     http.get<DastAsset[]>('/dast/assets', { params: filter }).then((r) => r.data),
+  createDastAsset: (asset: DastAsset) =>
+    http.post<DastAsset>('/dast/assets', asset).then((r) => r.data),
   createDastScan: (payload: DastCreateScanRequest) =>
     http.post<DastScan>('/dast/scans', payload).then((r) => r.data),
   listDastScans: () => http.get<DastScan[]>('/dast/scans').then((r) => r.data),

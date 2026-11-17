@@ -7,7 +7,7 @@
           <Crosshair class="w-4 h-4 text-blue-500" />
           <span>DAST 资产列表</span>
         </h1>
-        <p class="text-xs text-slate-400 mt-1">来自 CMDB／SIEM 的资产清单，勾选后按模板与探测端口发起动态扫描</p>
+        <p class="text-xs text-slate-400 mt-1">支持手动添加资产，勾选后按模板与探测端口发起动态扫描</p>
       </div>
       <div class="flex items-center gap-3">
         <a-button size="middle" :loading="loading" @click="load">
@@ -22,7 +22,7 @@
     </div>
 
     <!-- 过滤条（固定） -->
-    <div class="bg-white rounded-xl border border-slate-200/80 px-5 py-3 shadow-2xs flex items-end gap-3 shrink-0">
+    <div class="bg-white rounded-xl border border-slate-200/80 px-5 py-3 shadow-2xs flex flex-wrap items-end gap-3 shrink-0">
       <div class="w-44">
         <div class="text-[11px] text-slate-400 mb-1">来源标识</div>
         <a-input v-model:value="filter.source_id" size="small" placeholder="source_id" allow-clear />
@@ -40,6 +40,10 @@
         <a-input v-model:value="filter.business_id" size="small" placeholder="business_id" allow-clear />
       </div>
       <a-button size="small" type="primary" :loading="loading" @click="load">查询</a-button>
+      <a-button size="small" type="primary" class="ml-auto" @click="showAddAsset = true">
+        <template #icon><Plus class="w-3 h-3 inline-block mr-1" /></template>
+        添加
+      </a-button>
     </div>
 
     <!-- 资产列表卡片（卡片内独立滚动） -->
@@ -50,7 +54,7 @@
           :data-source="assets"
           :loading="loading"
           :row-selection="rowSelection"
-          row-key="cmdb_id"
+          :row-key="assetKey"
           size="middle"
           :pagination="{ pageSize: 15, showSizeChanger: false }"
         >
@@ -84,12 +88,30 @@
           </template>
           <template #emptyText>
             <div class="py-12 text-center text-xs text-slate-400">
-              {{ emptyText }}
+              当前筛选范围内没有资产，可点击“添加”手动录入
             </div>
           </template>
         </a-table>
       </div>
     </div>
+
+    <a-modal
+      v-model:open="showAddAsset"
+      title="添加资产"
+      width="640px"
+      :confirm-loading="addingAsset"
+      ok-text="添加"
+      cancel-text="取消"
+      @ok="submitAddAsset"
+    >
+      <a-form :model="newAsset" layout="vertical" class="mt-4">
+        <div class="grid grid-cols-2 gap-x-4">
+          <a-form-item v-for="field in assetFields" :key="field.key" :label="field.label" required>
+            <a-input v-model:value="newAsset[field.key]" :placeholder="field.placeholder" />
+          </a-form-item>
+        </div>
+      </a-form>
+    </a-modal>
 
     <!-- 发起扫描弹窗 -->
     <a-modal
@@ -161,8 +183,30 @@ const assets = ref<DastAsset[]>([])
 const loading = ref(false)
 const creating = ref(false)
 const showCreate = ref(false)
+const showAddAsset = ref(false)
+const addingAsset = ref(false)
 const selectedKeys = ref<string[]>([])
-const sourceNotConfigured = ref(false)
+
+const assetFields = [
+  { key: 'source_id', label: '来源标识', placeholder: '例如 manual' },
+  { key: 'cmdb_id', label: '资产标识', placeholder: '同一来源内唯一' },
+  { key: 'host', label: '主机地址', placeholder: 'IP 地址或域名，不含协议和端口' },
+  { key: 'cluster_id', label: '集群', placeholder: '与 DAST Worker 所属集群一致' },
+  { key: 'network_zone', label: '网络区域', placeholder: '与 DAST Worker 所属网络区域一致' },
+  { key: 'business_id', label: '业务', placeholder: '业务标识' },
+  { key: 'owner', label: '负责人', placeholder: '资产负责人' },
+] as const
+
+const newAsset = reactive<DastAsset>({
+  source_id: 'manual',
+  cmdb_id: '',
+  host: '',
+  cluster_id: '',
+  network_zone: '',
+  business_id: '',
+  owner: '',
+  registered_services: [],
+})
 
 const filter = reactive<DastAssetFilter>({
   source_id: '',
@@ -197,17 +241,45 @@ const rowSelection = computed(() => ({
   },
 }))
 
-const selected = computed(() => assets.value.filter((a) => selectedKeys.value.includes(a.cmdb_id)))
+function assetKey(asset: DastAsset) {
+  return JSON.stringify([asset.source_id, asset.cmdb_id])
+}
 
-const emptyText = computed(() =>
-  sourceNotConfigured.value
-    ? '资产来源尚未接入：server 未配置 CMDB／SIEM 适配器'
-    : '当前筛选范围内没有资产',
-)
+const selected = computed(() => assets.value.filter((a) => selectedKeys.value.includes(assetKey(a))))
+
+async function submitAddAsset() {
+  for (const field of assetFields) {
+    newAsset[field.key] = newAsset[field.key].trim()
+    if (!newAsset[field.key]) {
+      message.warning(`请填写${field.label}`)
+      return
+    }
+  }
+  addingAsset.value = true
+  try {
+    const asset = await api.createDastAsset(newAsset)
+    Object.assign(filter, {
+      source_id: asset.source_id,
+      cluster_id: asset.cluster_id,
+      network_zone: asset.network_zone,
+      business_id: asset.business_id,
+    })
+    selectedKeys.value = []
+    showAddAsset.value = false
+    for (const field of assetFields) {
+      newAsset[field.key] = field.key === 'source_id' ? 'manual' : ''
+    }
+    message.success('资产已添加')
+    await load()
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    addingAsset.value = false
+  }
+}
 
 async function load() {
   loading.value = true
-  sourceNotConfigured.value = false
   try {
     assets.value = await api.listDastAssets({
       source_id: filter.source_id || undefined,
@@ -216,12 +288,7 @@ async function load() {
       business_id: filter.business_id || undefined,
     })
   } catch (e: any) {
-    if (String(e.message).includes('asset source')) {
-      sourceNotConfigured.value = true
-      assets.value = []
-    } else {
-      message.error(e.message)
-    }
+    message.error(e.message)
   } finally {
     loading.value = false
   }

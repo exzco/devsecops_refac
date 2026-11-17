@@ -231,30 +231,15 @@ func BuildTaskPlans(assets []Asset, options ScanOptions) ([]TaskPlan, error) {
 	plans := make([]TaskPlan, 0, len(assets))
 
 	for i, asset := range assets {
-		// 校验
-		for name, value := range map[string]string{"source_id": asset.SourceID, "cluster_id": asset.ClusterID, "network_zone": asset.NetworkZone, "business_id": asset.BusinessID, "owner": asset.Owner} {
-			if value == "" || value != strings.TrimSpace(value) {
-				return nil, fmt.Errorf("asset %d: %s is required without surrounding whitespace", i, name)
-			}
-		}
-		if strings.TrimSpace(asset.CMDBID) == "" || asset.CMDBID != strings.TrimSpace(asset.CMDBID) {
-			return nil, fmt.Errorf("asset %d: CMDB ID is required and must have no surrounding whitespace", i)
+		asset, err := normalizeAsset(asset)
+		if err != nil {
+			return nil, fmt.Errorf("asset %d: %w", i, err)
 		}
 		if _, exists := seen[asset.AssetKey]; exists {
 			return nil, fmt.Errorf("duplicate CMDB ID: %q", asset.CMDBID)
 		}
 
 		seen[asset.AssetKey] = struct{}{}
-		host, err := NormalizeHost(asset.Host)
-		if err != nil {
-			return nil, fmt.Errorf("asset %q: %w", asset.CMDBID, err)
-		}
-
-		for j, service := range asset.RegisteredServices {
-			if err := validateRegisteredService(service, host); err != nil {
-				return nil, fmt.Errorf("asset %q registered service %d: %w", asset.CMDBID, j, err)
-			}
-		}
 		// 为每个计划复制切片，避免调用方后续修改影响已创建的执行输入。
 		asset.RegisteredServices = append([]AssetService(nil), asset.RegisteredServices...)
 		planOptions := options

@@ -125,6 +125,7 @@
               >
                 PoC 规则管理
               </div>
+              <div @click="navTo('/dast/poc-generate')" class="px-2.5 py-1.5 rounded-md cursor-pointer transition-colors" :class="currentRoute === '/dast/poc-generate' ? 'bg-blue-50 text-blue-600' : 'text-slate-500 hover:bg-slate-50'">PoC 生成</div>
             </div>
           </div>
 

@@ -1,0 +1,18 @@
+{
+ "$schema":"https://json-schema.org/draft/2020-12/schema",
+ "title":"HTTP vulnerability verification specification", "type":"object", "additionalProperties":false,
+ "required":["status","check_type","reason","product_key","name","version_range","probes","evidence"],
+ "properties":{
+  "status":{"type":"string","enum":["draft","needs-evidence"]},
+  "check_type":{"type":"string","enum":["fingerprint","vulnerability"],"description":"Fingerprint identifies a product; vulnerability matches vulnerability-specific behavior. Do not mix them in one specification."},
+  "reason":{"type":"string"}, "product_key":{"type":"string"}, "name":{"type":"string"}, "version_range":{"type":"string"},
+  "probes":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["method","path","headers","body","part","words","regex","version_regex"],"properties":{
+   "method":{"type":"string","enum":["GET","HEAD","POST","PUT","PATCH","DELETE","OPTIONS"]},
+   "path":{"type":"string","pattern":"^/[^\\r\\n{}]*$","description":"Relative HTTP endpoint. Requests are independent; no cross-request variables."},
+   "headers":{"type":"object","additionalProperties":{"type":"string"}},"body":{"type":"string"},
+   "part":{"type":"string","enum":["body","header"]},"words":{"type":"array","items":{"type":"string","minLength":1}},
+   "regex":{"type":"array","items":{"type":"string","minLength":1},"description":"Go/RE2 response patterns. All words and all regex patterns must match."},"version_regex":{"type":"string"}
+  },"anyOf":[{"properties":{"words":{"minItems":1}}},{"properties":{"regex":{"minItems":1}}}]}},
+  "evidence":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["source","text"],"properties":{"source":{"type":"string"},"text":{"type":"string"}}}}
+ }
+}

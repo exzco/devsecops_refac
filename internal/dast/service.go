@@ -62,13 +62,27 @@ func (s *Service) ExpireRun(ctx context.Context) error {
 	}
 }
 
+func (s *Service) CreateAsset(ctx context.Context, asset Asset) (Asset, error) {
+	asset, err := normalizeAsset(asset)
+	if err != nil {
+		return Asset{}, err
+	}
+	if asset.RegisteredServices == nil {
+		return Asset{}, errors.New("registered_services must be an array")
+	}
+	if err := s.store.CreateAsset(ctx, asset); err != nil {
+		return Asset{}, err
+	}
+	return asset, nil
+}
+
 func (s *Service) ListAssets(ctx context.Context, filter AssetFilter) ([]Asset, error) {
 	if s.source == nil {
 		return nil, errors.New("CMDB/SIEM asset source has not been configured")
 	}
 	assets, err := s.source.ListAssets(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("read CMDB/SIEM assets: %w", err)
+		return nil, fmt.Errorf("read asset source: %w", err)
 	}
 	result := make([]Asset, 0, len(assets))
 	seen := map[AssetKey]struct{}{}

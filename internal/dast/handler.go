@@ -79,6 +79,21 @@ func (h *Handler) ListAssets(c *echo.Context) error {
 	}
 	return c.JSON(200, result)
 }
+func (h *Handler) CreateAsset(c *echo.Context) error {
+	if _, err := h.authenticateUser(c); err != nil {
+		return failStatus(c, http.StatusUnauthorized, err)
+	}
+	var asset Asset
+	if err := h.decodeRequest(c, &asset); err != nil {
+		return fail(c, err)
+	}
+	result, err := h.service.CreateAsset(c.Request().Context(), asset)
+	if err != nil {
+		return fail(c, err)
+	}
+	return c.JSON(http.StatusCreated, result)
+}
+
 func (h *Handler) CreateScan(c *echo.Context) error {
 	user, err := h.authenticateUser(c)
 	if err != nil {

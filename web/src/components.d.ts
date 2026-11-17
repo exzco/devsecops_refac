@@ -14,6 +14,7 @@ declare module 'vue' {
     AFormItem: typeof import('ant-design-vue/es')['FormItem']
     AInput: typeof import('ant-design-vue/es')['Input']
     AInputNumber: typeof import('ant-design-vue/es')['InputNumber']
+    AInputPassword: typeof import('ant-design-vue/es')['InputPassword']
     AModal: typeof import('ant-design-vue/es')['Modal']
     APopconfirm: typeof import('ant-design-vue/es')['Popconfirm']
     AProgress: typeof import('ant-design-vue/es')['Progress']
@@ -27,6 +28,7 @@ declare module 'vue' {
     ATooltip: typeof import('ant-design-vue/es')['Tooltip']
     AUploadDragger: typeof import('ant-design-vue/es')['UploadDragger']
     FindingDetail: typeof import('./components/FindingDetail.vue')['default']
+    PocJobs: typeof import('./components/PocJobs.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
   }

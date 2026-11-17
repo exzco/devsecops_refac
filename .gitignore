@@ -11,3 +11,5 @@ worker-sast
 **/node_modules
 /docs/
 worker-dast
+env_cvps1
+/script/

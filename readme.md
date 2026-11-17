@@ -39,7 +39,7 @@ docs/               # 架构文档
 
 ## 配置
 
-所有进程共用项目根目录的 `.env`（`.env` 不入库），由 `internal/config` 的 `LoadEnv` 一次性解析；缺失或非法的值直接报错，不填默认值。
+所有进程共用项目根目录的 `.env`（`.env` 不入库），由 `internal/config` 的 `LoadEnv` 一次性解析；缺失报错，无默认值。
 
 ```dotenv
 # server
@@ -117,6 +117,18 @@ CREATE TABLE sast_findings (
 CREATE INDEX idx_sast_findings_scan_id_id ON sast_findings(scan_id, id);
 
 -- DAST
+CREATE TABLE dast_assets (
+    source_id TEXT NOT NULL,
+    cmdb_id TEXT NOT NULL,
+    host TEXT NOT NULL,
+    cluster_id TEXT NOT NULL,
+    network_zone TEXT NOT NULL,
+    business_id TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    registered_services JSONB NOT NULL CHECK (jsonb_typeof(registered_services) = 'array'),
+    PRIMARY KEY (source_id, cmdb_id)
+);
+
 CREATE TABLE dast_scans (
     id BIGSERIAL PRIMARY KEY,
     created_by TEXT NOT NULL,
@@ -185,7 +197,8 @@ DAST（`/api/v1/dast`）：
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/assets` | 资产列表（CMDB／SIEM 来源，尚未接入时返回未配置错误） |
+| GET | `/assets` | 已保存的资产列表，支持按来源、集群、网络区域及业务筛选 |
+| POST | `/assets` | 手动添加资产，来源与资产标识组合唯一 |
 | POST | `/scans` | 创建批次（资产集合 + 扫描选项） |
 | GET | `/scans` | 批次列表 |
 | GET | `/scans/:id` | 批次详情与任务列表 |
@@ -194,3 +207,42 @@ DAST（`/api/v1/dast`）：
 | GET | `/workers` | worker 在线状态 |
 
 DAST 的页面接口需要请求头 `X-User-Id` 标识调用方，接入统一登录后替换 `cmd/server/main.go` 中的 `userID`。
+
+## CVE / PoC 规则与生成
+
+cvps1 已建立 `poc_cves`、`poc_products`、`poc_generations`、`poc_jobs` 四张表及任务互斥索引。
+
+AI 生成仅在用户指定 CVE、点击“生成探测模板”后执行。同步 CVE、搜索 GitHub、打开页面或发现缺少 PoC 均不会自动触发 AI 生成。后台队列仅执行用户已提交的任务。
+
+同步优先读取 GitHub 索引仓库：`nomi-sec/PoC-in-GitHub`、`trickest/cve`、`projectdiscovery/nuclei-templates`，再读取 GitHub 公告和 NVD。公告按日期范围获取，索引仓库按日期范围涉及的 CVE 年份导入；仓库索引在服务端缓存 6 小时。仓库只读取数据和模板链接，不执行其中的代码。各来源的链接按 URL 合并，人工补充不被同步覆盖。
+
+后台任务持久化，单个任务依次执行。某个远程来源不可用时记录该来源错误，继续处理其他来源，最终显示“部分完成”及具体原因；数据库写入错误立即终止。近期公告中仍没有相关链接的 CVE 才逐个进行 GitHub 搜索，间隔 7 秒，搜索缓存 24 小时；手动搜索也会查询上述索引。服务重启时未完成任务标为中断，可重新提交。列表保留浏览器及服务端 5 分钟缓存。
+
+PoC 生成页管理按产品复用的指纹档案，使用 CVE 来源数据、手工材料和产品档案抽取 `internal/poc/spec.schema.json` 定义的规格，再由 `agentPoc.go` 渲染为 Nuclei JSON 模板（JSON 同时是合法 YAML）。每批最多 20 个 CVE，结果逐项保存。缺少材料时记录 `needs-evidence`，不生成模板。规格可手动修改并重新渲染、下载；产物是产品指纹和版本探测草稿
+
+`internal/infra/netAgent.go` 支持以下协议，Base URL 包含 API 版本路径：
+
+| AI_PROTOCOL | AI_BASE_URL 示例 | 接口 |
+| --- | --- | --- |
+| openai | `https://api.openai.com/v1` 或兼容服务地址 | `/chat/completions` |
+| anthropic | `https://api.anthropic.com/v1` | `/messages` |
+| gemini | `https://generativelanguage.googleapis.com/v1beta` | `/models/{model}:generateContent` |
+
+在 `.env` / `env_cvps1` 设置 `AI_PROTOCOL`、`AI_BASE_URL`、`AI_MODEL`、`AI_API_KEY`；缺少配置时可管理 CVE 和产品档案，生成接口明确报错。`GITHUB_TOKEN` 和 `NVD_API_KEY` 为可选数据源凭据，未设置时使用公开接口限额。密钥仅在服务端读取。配置变更后重启 server。
+
+相关接口统一位于 `/api/v1/dast`，使用现有 `X-User-Id` 身份约定：`GET /pocs`、`PUT /pocs/:id`、`POST /pocs/sync`、`POST /pocs/search`、`GET /poc-jobs`、`GET/PUT /poc-products[/:key]`、`GET /poc-agent`、`POST /poc-generate`、`GET/PUT /poc-generations[/:id]`。
+
+数据源接口：[NVD CVE API](https://nvd.nist.gov/developers/vulnerabilities)、[GitHub 公告](https://docs.github.com/en/rest/security-advisories/global-advisories)、[GitHub 仓库搜索](https://docs.github.com/en/rest/search/search#search-repositories)。
+
+
+### 从 CVE 自动生成
+
+PoC 生成页输入 CVE 编号后，自动读取数据库中的描述、来源记录、相关链接、人工补充及匹配产品档案，预览不调用 AI。用户点击生成后，后台从这些信息识别产品、抽取规格并渲染探测模板；信息不足时保存原因，产品关联允许为空，不创建虚构档案。相关链接本身不代表已抓取正文。
+
+页面“API 配置”支持 OpenAI 兼容、Anthropic 和 Gemini。设置保存到 server 工作目录的 `.env`（cvps1 为 `env_cvps1` 的符号链接），文件权限为 0600，立即用于后续任务，重启后仍有效。API 不返回密钥；密钥留空保留原值，切换协议或地址需重新填写。运行中的任务继续使用提交执行时的配置。
+
+既有部署需执行 `ALTER TABLE poc_generations ALTER COLUMN product_key DROP NOT NULL;`，以保存尚未识别产品的生成结果。新增接口：`GET /api/v1/dast/poc-context/:id`、`PUT /api/v1/dast/poc-agent`。
+
+日期同步支持跨月、跨年范围；后台将公告请求拆成最多 30 天的窗口，逐窗分页。日期格式或先后关系错误在提交时直接返回，不再创建必然失败的任务。
+
+单个 CVE 查询优先使用已入库的官方记录；缺失时并行读取 CVEProject/cvelistV5、对应编号的 PoC-in-GitHub JSON 和 GitHub 公告，保存后供后续访问复用。它不等待整年同步任务，也不下载整年仓库。页面“更新来源”可重新获取该编号；来源不可用会显示具体信息。规则页也可输入完整编号后点击“按编号获取”。AI 生成仍由用户手动提交。

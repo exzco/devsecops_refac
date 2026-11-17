@@ -46,6 +46,28 @@ type Asset struct {
 	RegisteredServices []AssetService `json:"registered_services"`
 }
 
+func normalizeAsset(asset Asset) (Asset, error) {
+	for name, value := range map[string]string{
+		"source_id": asset.SourceID, "cmdb_id": asset.CMDBID, "cluster_id": asset.ClusterID,
+		"network_zone": asset.NetworkZone, "business_id": asset.BusinessID, "owner": asset.Owner,
+	} {
+		if value == "" || value != strings.TrimSpace(value) {
+			return Asset{}, fmt.Errorf("%s is required without surrounding whitespace", name)
+		}
+	}
+	host, err := NormalizeHost(asset.Host)
+	if err != nil {
+		return Asset{}, err
+	}
+	asset.Host = host
+	for i, service := range asset.RegisteredServices {
+		if err := validateRegisteredService(service, host); err != nil {
+			return Asset{}, fmt.Errorf("registered service %d: %w", i, err)
+		}
+	}
+	return asset, nil
+}
+
 func NormalizeHost(host string) (string, error) {
 	if addr, err := netip.ParseAddr(host); err == nil {
 		if addr.Zone() != "" {
@@ -92,7 +114,7 @@ func validatePort(port int, transport Transport) error {
 	return nil
 }
 
-// AssetSource 是 CMDB／SIEM 资产接口，由公司的资产系统实现。
+// AssetSource 提供已保存的手工资产或 CMDB／SIEM 资产。
 type AssetSource interface {
 	ListAssets(context.Context) ([]Asset, error)
 }
