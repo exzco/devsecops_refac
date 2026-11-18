@@ -17,22 +17,15 @@
    <a-input v-model:value="query" placeholder="搜索 CVE / 标题 / 描述" class="!w-64" allow-clear @pressEnter="load" />
    <a-button type="primary" :loading="loading" @click="load">查询</a-button>
    <a-button :disabled="!/^CVE-\d{4}-\d{4,}$/i.test(query.trim())" :loading="retrieving" @click="lookup">按编号获取</a-button>
-   <a-select v-model:value="filter" class="!w-36" :options="[
-     {value:'all',label:'全部状态'},
-     {value:'missing',label:'无 PoC / 候选'},
-     {value:'manual',label:'人工补充 PoC'},
-     {value:'candidate',label:'有 GitHub 候选'}
+   <span class="text-xs text-slate-500">来源筛选</span>
+   <a-select v-model:value="sourceFilter" class="!w-64" placeholder="全部来源" allow-clear :options="[
+     {value:'github',label:'GitHub'},
+     {value:'nvd',label:'NVD'},
+     {value:'github-without-nvd',label:'GitHub 有 / NVD 无'}
    ]" @change="load" />
 
    <!-- 列表时间范围与年份筛选 -->
    <a-select v-model:value="filterYear" class="!w-36" :options="yearOptions" placeholder="CVE 年份" @change="load" />
-   <div class="flex items-center gap-1.5 text-xs text-slate-600 border border-slate-200 rounded px-2.5 py-1.5 bg-slate-50">
-    <span class="text-slate-400">入库时间:</span>
-    <input type="date" v-model="filterStart" class="bg-transparent border-0 outline-none text-xs" @change="load" />
-    <span>至</span>
-    <input type="date" v-model="filterEnd" class="bg-transparent border-0 outline-none text-xs" @change="load" />
-    <button v-if="filterStart || filterEnd" @click="filterStart='';filterEnd='';load()" class="ml-1 text-slate-400 hover:text-slate-600 text-xs">✕</button>
-   </div>
 
    <a-button @click="resetAndLoad">重置</a-button>
    <span class="text-xs text-slate-400 ml-auto">展示最新 {{ items.length }} 项</span>
@@ -48,13 +41,28 @@
       <div class="text-xs text-slate-500 mt-1">{{record.manual.title}}</div>
       <div class="text-xs mt-2 line-clamp-3">{{description(record as any)}}</div>
       <div class="text-xs text-slate-400 mt-1">{{Object.keys(record.sources).join(' / ')}}</div>
+      <a v-if="sourceFilter==='github-without-nvd'" :href="'https://nvd.nist.gov/vuln/detail/' + encodeURIComponent(record.id)" target="_blank" rel="noopener noreferrer" class="text-xs">到 NVD 核对</a>
      </template>
      <template v-if="column.key==='poc'">
+      <a-button v-if="record.sources['projectdiscovery/nuclei-templates']?.links?.length" size="small" class="mb-2" @click="openNuclei(record.id)">Nuclei YAML</a-button>
       <div v-for="link in record.manual.pocs" :key="link.url">
        <a :href="link.url" target="_blank" rel="noopener noreferrer">{{link.title || link.url}}</a>
       </div>
-      <div v-for="link in record.discovered" :key="link.url" class="text-xs mt-1">
+      <div
+       v-for="link in (expandedDiscovered[record.id] ? record.discovered : record.discovered.slice(0, 5))"
+       :key="link.url"
+       class="text-xs mt-1"
+      >
        候选 · <a :href="link.url" target="_blank" rel="noopener noreferrer">{{link.title}}</a>
+      </div>
+      <div v-if="record.discovered.length > 5" class="mt-1">
+       <button
+        type="button"
+        class="text-xs text-blue-600 hover:text-blue-800 cursor-pointer"
+        @click="toggleDiscovered(record.id)"
+       >
+        {{ expandedDiscovered[record.id] ? '收起' : `查看更多 (还有 ${record.discovered.length - 5} 条)...` }}
+       </button>
       </div>
       <span v-if="!record.manual.pocs?.length && !record.discovered.length" class="text-slate-400">
        {{record.searched_at ? '未找到候选' : '尚未搜索'}}
@@ -69,6 +77,12 @@
     </template>
    </a-table>
   </div>
+
+  <a-modal :open="!!nucleiCVE" :title="nucleiCVE + ' · Nuclei YAML'" :footer="null" width="900px" @cancel="nucleiCVE=''">
+   <NucleiTemplates v-if="nucleiTemplates?.length" :templates="nucleiTemplates" />
+   <p v-else class="text-sm text-slate-500 my-4">尚未收录 YAML 正文，请更新来源。</p>
+   <a-button class="mt-3" :loading="refreshingNuclei" @click="refreshNuclei">更新来源</a-button>
+  </a-modal>
 
   <!-- 同步外部数据弹窗 -->
   <a-modal v-model:open="syncModalOpen" title="同步 CVE 与 PoC 数据" ok-text="开始同步" cancel-text="取消" @ok="startSync">
@@ -104,7 +118,23 @@
    </a-form>
    <div v-if="existing" class="border-t border-slate-100 pt-4">
     <div class="flex justify-between items-center mb-3"><span class="font-medium text-sm">GitHub 相关仓库</span><a-button size="small" @click="search(id)">搜索 GitHub</a-button></div>
-    <div v-for="link in currentRecord?.discovered" :key="link.url" class="flex justify-between gap-3 py-2 text-xs"><a :href="link.url" target="_blank" rel="noopener noreferrer">{{link.title}}</a><a-button size="small" :disabled="manual.pocs.some(p=>p.url===link.url)" @click="manual.pocs.push({...link})">加入相关链接</a-button></div>
+    <div
+     v-for="link in (modalShowAllDiscovered ? currentRecord?.discovered : currentRecord?.discovered?.slice(0, 5))"
+     :key="link.url"
+     class="flex justify-between gap-3 py-2 text-xs"
+    >
+     <a :href="link.url" target="_blank" rel="noopener noreferrer" class="truncate">{{link.title}}</a>
+     <a-button size="small" :disabled="manual.pocs.some(p=>p.url===link.url)" @click="manual.pocs.push({...link})">加入相关链接</a-button>
+    </div>
+    <div v-if="(currentRecord?.discovered?.length ?? 0) > 5" class="mt-2">
+     <button
+      type="button"
+      class="text-xs text-blue-600 hover:text-blue-800 cursor-pointer"
+      @click="modalShowAllDiscovered = !modalShowAllDiscovered"
+     >
+      {{ modalShowAllDiscovered ? '收起' : `查看更多 (还有 ${(currentRecord?.discovered?.length ?? 0) - 5} 条)...` }}
+     </button>
+    </div>
     <p v-if="!currentRecord?.discovered.length" class="text-xs text-slate-400">{{currentRecord?.searched_at ? '暂无搜索结果，可重新搜索。' : '尚未搜索。搜索在后台执行，完成后结果会更新到这里。'}}</p>
     <a-button v-if="!manual.pocs.length && !currentRecord?.discovered.length" class="mt-3" @click="router.push({path:'/dast/poc-generate',query:{cve:id}})">前往 PoC 生成</a-button>
    </div>
@@ -116,12 +146,16 @@ import {computed,onMounted,ref} from 'vue'
 import {useRouter} from 'vue-router'
 import {message} from 'ant-design-vue'
 import PocJobs from '@/components/PocJobs.vue'
-import {poc,loadCatalog,description,type CVE,type Manual} from '@/api/poc'
+import NucleiTemplates from '@/components/NucleiTemplates.vue'
+import {poc,loadCatalog,description,type CVE,type Manual,type Evidence} from '@/api/poc'
 
 const router=useRouter()
+const nucleiCVE=ref(''),nucleiTemplates=ref<Evidence[] | null>(null),refreshingNuclei=ref(false)
+async function openNuclei(id:string){try{nucleiTemplates.value=await poc.nuclei(id);nucleiCVE.value=id}catch(e:any){message.error(e.message)}}
+async function refreshNuclei(){refreshingNuclei.value=true;try{const context=await poc.refreshContext(nucleiCVE.value);nucleiTemplates.value=context.templates;if(context.notices.length)message.warning(context.notices.join('；'));await load()}catch(e:any){message.error(e.message)}finally{refreshingNuclei.value=false}}
 const items=ref<CVE[]>([])
 const query=ref('')
-const filter=ref('all')
+const sourceFilter=ref<string>()
 const filterYear=ref('all')
 const filterStart=ref('')
 const filterEnd=ref('')
@@ -134,6 +168,9 @@ const manual=ref<Manual>({title:'',description:'',pocs:[],notes:''})
 const currentRecord=computed(()=>items.value.find(c=>c.id===id.value))
 const retrieving=ref(false)
 const jobs=ref<InstanceType<typeof PocJobs>>()
+const expandedDiscovered=ref<Record<string, boolean>>({})
+const modalShowAllDiscovered=ref(false)
+function toggleDiscovered(cveId: string) { expandedDiscovered.value[cveId] = !expandedDiscovered.value[cveId] }
 
 // 同步弹窗状态
 const syncModalOpen=ref(false)
@@ -176,7 +213,7 @@ async function load(_?: any){
  try{
   items.value=await loadCatalog({
    q:query.value.trim() || undefined,
-   filter:filter.value!=='all' ? filter.value : undefined,
+   source:sourceFilter.value,
    year:filterYear.value!=='all' ? filterYear.value : undefined,
    start:filterStart.value || undefined,
    end:filterEnd.value || undefined,
@@ -191,13 +228,13 @@ async function load(_?: any){
 
 function resetAndLoad(){
  query.value=''
- filter.value='all'
+ sourceFilter.value=undefined
  filterYear.value='all'
  filterStart.value=''
  filterEnd.value=''
  load()
 }
-function edit(c?:CVE){existing.value=!!c;id.value=c?.id??'';manual.value={title:c?.manual.title??'',description:c?.manual.description??'',pocs:c?.manual.pocs?.map(l=>({...l}))??[],notes:c?.manual.notes??''};editing.value=true}
+function edit(c?:CVE){existing.value=!!c;id.value=c?.id??'';modalShowAllDiscovered.value=false;manual.value={title:c?.manual.title??'',description:c?.manual.description??'',pocs:c?.manual.pocs?.map(l=>({...l}))??[],notes:c?.manual.notes??''};editing.value=true}
 async function save(){saving.value=true;try{await poc.save(id.value.trim().toUpperCase(),manual.value);editing.value=false;await load()}catch(e:any){message.error(e.message)}finally{saving.value=false}}
 async function lookup(){retrieving.value=true;try{const result=await poc.context(query.value.trim().toUpperCase());await load();if(result.notices.length)message.warning(result.notices.join('；'));else message.success('CVE 信息已获取')}catch(e:any){message.error(e.message)}finally{retrieving.value=false}}
 async function startSync(){

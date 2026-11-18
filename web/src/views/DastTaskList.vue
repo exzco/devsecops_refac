@@ -28,6 +28,11 @@
           size="middle"
           :pagination="{ pageSize: 15, showSizeChanger: false }"
         >
+          <template #expandedRowRender="{ record }">
+            <div v-for="task in record.hosts" :key="task.id" class="flex gap-4 py-1 text-xs">
+              <span class="font-mono">#{{ task.id }} · {{ task.host }}</span><span>{{ statusText(task.status) }}</span>
+            </div>
+          </template>
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'id'">
               <span
@@ -68,6 +73,11 @@
                 {{ statusText(record.status) }}
               </span>
             </template>
+            <template v-else-if="column.key === 'action'">
+              <a-popconfirm v-if="['pending', 'running'].includes(record.status)" title="取消本批次所有未完成的主机任务？" @confirm="cancelScan(record.id)">
+                <a-button danger size="small">取消批次</a-button>
+              </a-popconfirm>
+            </template>
             <template v-else-if="column.key === 'created_at'">
               <span class="text-xs text-slate-500 font-mono">{{ dayjs(record.created_at).format('YYYY-MM-DD HH:mm:ss') }}</span>
             </template>
@@ -103,6 +113,7 @@ const columns = [
   { title: '失败任务', dataIndex: 'failed_tasks', key: 'failed_tasks', width: 100, align: 'center' as const },
   { title: '状态', dataIndex: 'status', key: 'status', width: 120, align: 'center' as const },
   { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 170 },
+  { title: '操作', key: 'action', width: 100 },
   { title: '结束时间', dataIndex: 'finished_at', key: 'finished_at', width: 170 },
 ]
 
@@ -136,12 +147,23 @@ function statusDotStyle(status: string) {
 function statusText(status: string) {
   return (
     {
+      cancelled: '已取消',
       pending: '排队中',
       running: '执行中',
       success: '扫描成功',
       failed: '扫描失败',
     }[status] ?? status
   )
+}
+
+async function cancelScan(id: string) {
+  try {
+    await api.cancelDastScan(id)
+    message.success('已取消未完成的主机任务')
+  } catch (e: any) {
+    message.error(e.message)
+  }
+  await load()
 }
 
 async function load() {

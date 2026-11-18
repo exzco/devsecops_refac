@@ -30,7 +30,7 @@
         <span class="text-xs text-slate-500 font-medium">
           发现 <strong class="text-rose-600 font-bold">{{ findings.length }}</strong> 处隐患
         </span>
-        <a-button size="small" :loading="scanLoading || findingsLoading" @click="refreshAll">
+        <a-button size="small" :loading="loading" @click="refreshAll">
           <template #icon><RotateCw class="w-3 h-3 inline-block mr-1" /></template>
           刷新
         </a-button>
@@ -90,7 +90,7 @@
 
         <!-- 漏洞纵向列表（卡片内独立滚动） -->
         <div class="flex-1 overflow-y-auto p-2 space-y-1.5 divide-y-0">
-          <a-spin :spinning="findingsLoading">
+          <a-spin :spinning="loading && !scan">
             <template v-if="filteredFindings.length > 0">
               <div
                 v-for="(f, idx) in filteredFindings"
@@ -294,7 +294,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import {
@@ -313,12 +313,12 @@ import type { Scan, Finding, Location } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
-const id = Number(route.params.id)
+const id = computed(() => Number(route.params.id))
 
 const scan = ref<Scan | null>(null)
-const scanLoading = ref(false)
+const loading = ref(false)
 const findings = ref<Finding[]>([])
-const findingsLoading = ref(false)
+let refreshAll: () => Promise<void>
 const deleting = ref(false)
 
 const filterLevel = ref('')
@@ -471,35 +471,63 @@ function stepRoleText(idx: number, total: number) {
   return `${String(idx + 1).padStart(2, '0')} 传递 Pass`
 }
 
-async function loadScan() {
-  scanLoading.value = true
-  try {
-    scan.value = await api.getScan(id)
-  } catch (e: any) {
-    message.error(e.message)
-  } finally {
-    scanLoading.value = false
-  }
+function findingKey(f: Finding) {
+  return JSON.stringify([f.rule_id, f.fingerprints, f.locations[0]?.uri, f.locations[0]?.startLine, f.locations[0]?.startColumn, f.message])
 }
 
-async function loadFindings() {
-  findingsLoading.value = true
-  try {
-    findings.value = await api.getScanFindings(id)
-    selectedIndex.value = 0
-    activeStepIndex.value = -1
-  } catch (e: any) {
-    message.error(e.message)
-  } finally {
-    findingsLoading.value = false
+watch(id, (scanID, _, onCleanup) => {
+  const detailRequest = new AbortController()
+  const { signal } = detailRequest
+  let timer: ReturnType<typeof setTimeout>
+  onCleanup(() => {
+    // 只停止旧详情的读取和轮询，扫描任务由 Worker 执行。
+    detailRequest.abort()
+    clearTimeout(timer)
+  })
+  scan.value = null
+  findings.value = []
+  filterLevel.value = ''
+  selectFinding(0)
+  loading.value = false
+  refreshAll = async () => {
+    if (loading.value || signal.aborted) return
+    clearTimeout(timer)
+    loading.value = true
+    try {
+      const current = await api.getScan(scanID, signal)
+      if (signal.aborted) return
+      scan.value = current
+      if (current.status === 'success' || current.status === 'failed') {
+        const rows = await api.getScanFindings(scanID, signal)
+        if (signal.aborted) return
+        const key = activeFinding.value && findingKey(activeFinding.value)
+        findings.value = rows
+        const index = filteredFindings.value.findIndex(f => findingKey(f) === key)
+        if (index < 0) selectFinding(0)
+        else {
+          selectedIndex.value = index
+          if (activeStepIndex.value >= taintSteps.value.length) activeStepIndex.value = -1
+        }
+      }
+    } catch (e: any) {
+      if (!signal.aborted) message.error(e.message)
+    } finally {
+      if (!signal.aborted) {
+        loading.value = false
+        if (scan.value?.status === 'pending' || scan.value?.status === 'running') timer = setTimeout(refreshAll, 3000)
+      }
+    }
   }
-}
+  void refreshAll()
+}, { immediate: true })
 
 async function handleDeleteCurrentScan() {
   deleting.value = true
   try {
-    await api.deleteScan(id)
-    message.success(`任务 #${id} 已成功删除`)
+    const scanID = id.value
+    await api.deleteScan(scanID)
+    if (scanID !== id.value) return
+    message.success(`任务 #${scanID} 已成功删除`)
     router.push('/sast/scans')
   } catch (e: any) {
     message.error(e.message || '删除任务失败')
@@ -508,15 +536,9 @@ async function handleDeleteCurrentScan() {
   }
 }
 
-function refreshAll() {
-  loadScan()
-  loadFindings()
-}
-
 watch(filterLevel, () => {
   selectedIndex.value = 0
   activeStepIndex.value = -1
 })
 
-onMounted(refreshAll)
 </script>

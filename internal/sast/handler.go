@@ -189,3 +189,4 @@ func (h *Handler) DeleteScan(c *echo.Context) error {
 		"scan_id": scanID,
 	})
 }
+

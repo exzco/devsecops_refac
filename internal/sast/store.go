@@ -95,7 +95,7 @@ func (s *Store) UpdateScanStatus(c context.Context, scanID uint64, status ScanSt
 	const query = `
 		UPDATE sast_scans
 		SET status = $1, error = $2, updated_at = NOW()
-		WHERE id = $3
+		WHERE id = $3 AND status = 'running'
 	`
 	result, err := s.db.Exec(c, query, status, e, scanID)
 	if err != nil {
@@ -106,31 +106,6 @@ func (s *Store) UpdateScanStatus(c context.Context, scanID uint64, status ScanSt
 	}
 
 	return nil
-}
-
-func (s *Store) SaveSastResult(c context.Context, scanID uint64, result *ScanResult) (string, error) {
-	if result == nil {
-		return "", fmt.Errorf("scan %d result is required", scanID)
-	}
-	const query = `
-		UPDATE sast_scans
-		SET report_path = $1,
-		commit_sha = $2,
-		status = $3,
-		error = '',
-		updated_at = NOW()
-		WHERE id = $4
-	`
-
-	tag, err := s.db.Exec(c, query, result.ReportPath, result.CommitSHA, ScanSuccess, scanID)
-	if err != nil {
-		return "", err
-	}
-	if tag.RowsAffected() != 1 {
-		return "", fmt.Errorf("scan %d not found", scanID)
-	}
-
-	return result.ReportPath, nil
 }
 
 func (s *Store) ClaimScan(ctx context.Context, scanID uint64, workerID string) error {
@@ -155,14 +130,23 @@ func (s *Store) ClaimScan(ctx context.Context, scanID uint64, workerID string) e
 	return nil
 }
 
-func (s *Store) SaveFindings(ctx context.Context, scanID uint64, findings []Finding) error {
+func (s *Store) CompleteScan(ctx context.Context, scanID uint64, result *ScanResult, findings []Finding) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin save findings transaction: %w", err)
 	}
-	defer func() {
-		_ = tx.Rollback(context.Background())
-	}()
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `UPDATE sast_scans SET report_path=$2, commit_sha=$3,
+		status='success', error='', updated_at=NOW() WHERE id=$1 AND status='running'`, scanID, result.ReportPath, result.CommitSHA)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("scan %d is no longer running", scanID)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM sast_findings WHERE scan_id=$1`, scanID); err != nil {
+		return err
+	}
 
 	const query = `
 		INSERT INTO sast_findings (scan_id, ordinal, rule_id, title, message, level,
@@ -280,17 +264,12 @@ func (s *Store) DeleteFindings(ctx context.Context, scanID uint64) error {
 }
 
 func (s *Store) DeleteScan(ctx context.Context, scanID uint64) error {
-	tx, err := s.db.Begin(ctx)
+	tag, err := s.db.Exec(ctx, `DELETE FROM sast_scans WHERE id=$1 AND status <> 'running'`, scanID)
 	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+		return err
 	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx, `DELETE FROM sast_findings WHERE scan_id = $1`, scanID); err != nil {
-		return fmt.Errorf("delete findings for scan %d: %w", scanID, err)
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("scan %d is running or no longer exists", scanID)
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM sast_scans WHERE id = $1`, scanID); err != nil {
-		return fmt.Errorf("delete scan %d: %w", scanID, err)
-	}
-	return tx.Commit(ctx)
+	return nil
 }

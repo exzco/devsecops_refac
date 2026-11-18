@@ -117,12 +117,13 @@ export interface DastCreateScanRequest {
 }
 
 export interface DastScan {
+  hosts?: { id: string; host: string; status: DastTask['status'] }[]
   id: string
   created_by: string
   total_tasks: number
   finished_tasks: number
   failed_tasks: number
-  status: 'pending' | 'running' | 'success' | 'failed'
+  status: 'pending' | 'running' | 'success' | 'failed' | 'cancelled'
   created_at: string
   started_at?: string
   finished_at?: string
@@ -135,7 +136,7 @@ export interface DastTask {
     asset: DastAsset
     options: DastScanOptions
   }
-  status: 'pending' | 'running' | 'success' | 'failed'
+  status: 'pending' | 'running' | 'success' | 'failed' | 'cancelled'
   worker_id: string
   execution_deadline?: string
   created_at: string

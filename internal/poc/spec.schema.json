@@ -13,6 +13,10 @@
     "name": {
       "type": "string"
     },
+    "mapping_command": {
+      "type": "string",
+      "description": "仅输出奇安信鹰图 (Hunter) 空间测绘检索语法，例如 app.name=\"xxx\" 或 (web.title=\"xxx\" && header=\"xxx\")"
+    },
     "evidence": {
       "type": "array",
       "items": {
@@ -20,12 +24,10 @@
         "additionalProperties": false,
         "properties": {
           "source": {
-            "type": "string",
-            "minLength": 1
+            "$ref": "#/$defs/text"
           },
           "text": {
-            "type": "string",
-            "minLength": 1
+            "$ref": "#/$defs/text"
           }
         },
         "required": [
@@ -47,10 +49,37 @@
     "version",
     "product_key",
     "name",
+    "mapping_command",
     "evidence",
     "results"
   ],
   "$defs": {
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "textList": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/text"
+      },
+      "minItems": 1
+    },
+    "condition": {
+      "type": "string",
+      "enum": [
+        "and",
+        "or"
+      ]
+    },
+    "part": {
+      "type": "string",
+      "enum": [
+        "body",
+        "header",
+        "all"
+      ]
+    },
     "result": {
       "type": "object",
       "additionalProperties": false,
@@ -70,14 +99,12 @@
           ]
         },
         "reason": {
-          "type": "string",
-          "minLength": 1
+          "$ref": "#/$defs/text"
         },
         "missing_information": {
           "type": "array",
           "items": {
-            "type": "string",
-            "minLength": 1
+            "$ref": "#/$defs/text"
           }
         },
         "template": {
@@ -140,12 +167,10 @@
           "additionalProperties": false,
           "properties": {
             "name": {
-              "type": "string",
-              "minLength": 1
+              "$ref": "#/$defs/text"
             },
             "author": {
-              "type": "string",
-              "minLength": 1
+              "$ref": "#/$defs/text"
             },
             "severity": {
               "type": "string",
@@ -159,8 +184,7 @@
               ]
             },
             "description": {
-              "type": "string",
-              "minLength": 1
+              "$ref": "#/$defs/text"
             },
             "reference": {
               "type": "array",
@@ -181,15 +205,13 @@
                 "cve-id": {
                   "type": "array",
                   "items": {
-                    "type": "string",
-                    "minLength": 1
+                    "$ref": "#/$defs/text"
                   }
                 },
                 "cwe-id": {
                   "type": "array",
                   "items": {
-                    "type": "string",
-                    "minLength": 1
+                    "$ref": "#/$defs/text"
                   }
                 }
               },
@@ -246,11 +268,7 @@
                 "minimum": 0
               },
               "matchers-condition": {
-                "type": "string",
-                "enum": [
-                  "and",
-                  "or"
-                ]
+                "$ref": "#/$defs/condition"
               },
               "matchers": {
                 "type": "array",
@@ -264,12 +282,7 @@
                           "const": "word"
                         },
                         "words": {
-                          "type": "array",
-                          "items": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "minItems": 1
+                          "$ref": "#/$defs/textList"
                         },
                         "name": {
                           "type": "string"
@@ -278,19 +291,10 @@
                           "type": "boolean"
                         },
                         "part": {
-                          "type": "string",
-                          "enum": [
-                            "body",
-                            "header",
-                            "all"
-                          ]
+                          "$ref": "#/$defs/part"
                         },
                         "condition": {
-                          "type": "string",
-                          "enum": [
-                            "and",
-                            "or"
-                          ]
+                          "$ref": "#/$defs/condition"
                         }
                       },
                       "required": [
@@ -308,12 +312,7 @@
                           "const": "regex"
                         },
                         "regex": {
-                          "type": "array",
-                          "items": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "minItems": 1
+                          "$ref": "#/$defs/textList"
                         },
                         "name": {
                           "type": "string"
@@ -322,19 +321,10 @@
                           "type": "boolean"
                         },
                         "part": {
-                          "type": "string",
-                          "enum": [
-                            "body",
-                            "header",
-                            "all"
-                          ]
+                          "$ref": "#/$defs/part"
                         },
                         "condition": {
-                          "type": "string",
-                          "enum": [
-                            "and",
-                            "or"
-                          ]
+                          "$ref": "#/$defs/condition"
                         }
                       },
                       "required": [
@@ -386,23 +376,13 @@
                       "const": "regex"
                     },
                     "part": {
-                      "type": "string",
-                      "enum": [
-                        "body",
-                        "header",
-                        "all"
-                      ]
+                      "$ref": "#/$defs/part"
                     },
                     "name": {
                       "type": "string"
                     },
                     "regex": {
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "minLength": 1
-                      },
-                      "minItems": 1
+                      "$ref": "#/$defs/textList"
                     },
                     "group": {
                       "type": "integer",

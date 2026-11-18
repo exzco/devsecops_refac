@@ -7,7 +7,7 @@
         <div class="flex items-start justify-between">
           <div>
             <div class="text-xs text-slate-400 font-medium">已接入源码工程</div>
-            <div class="text-2xl font-bold text-slate-800 mt-2">{{ repoCount }}</div>
+            <div class="text-2xl font-bold text-slate-800 mt-2">{{ stats?.repos ?? '—' }}</div>
           </div>
           <div class="w-10 h-10 rounded-lg border border-slate-200/70 flex items-center justify-center text-slate-500 bg-slate-50/60">
             <FileArchive class="w-5 h-5 text-amber-500" />
@@ -21,13 +21,13 @@
         <div class="flex items-start justify-between">
           <div>
             <div class="text-xs text-slate-400 font-medium">SAST 静态扫描任务</div>
-            <div class="text-2xl font-bold text-slate-800 mt-2">{{ scanCount }}</div>
+            <div class="text-2xl font-bold text-slate-800 mt-2">{{ stats?.scans ?? '—' }}</div>
           </div>
           <div class="w-10 h-10 rounded-lg border border-slate-200/70 flex items-center justify-center text-slate-500 bg-slate-50/60">
             <Code2 class="w-5 h-5 text-slate-600" />
           </div>
         </div>
-        <div class="text-xs text-slate-400 mt-4">{{ findingCount }} 处静态代码隐患点</div>
+        <div class="text-xs text-slate-400 mt-4">{{ stats?.findings ?? '—' }} 处静态代码隐患点</div>
       </div>
 
       <!-- 3. DAST 动态扫描任务 -->
@@ -35,13 +35,13 @@
         <div class="flex items-start justify-between">
           <div>
             <div class="text-xs text-slate-400 font-medium">DAST 动态扫描任务</div>
-            <div class="text-2xl font-bold text-slate-800 mt-2">0</div>
+            <div class="text-2xl font-bold text-slate-800 mt-2">{{ stats?.batches ?? '—' }}</div>
           </div>
           <div class="w-10 h-10 rounded-lg border border-slate-200/70 flex items-center justify-center text-slate-500 bg-slate-50/60">
             <Crosshair class="w-5 h-5 text-slate-600" />
           </div>
         </div>
-        <div class="text-xs text-slate-400 mt-4">0 个资产暴露端口 (0 漏洞)</div>
+        <div class="text-xs text-slate-400 mt-4">历史发现 {{ stats?.ports ?? '—' }} 个开放端口（{{ stats?.vulnerabilities ?? '—' }} 条漏洞记录）</div>
       </div>
 
       <!-- 4. Worker 节点 -->
@@ -198,12 +198,12 @@
                 <div class="flex items-center justify-between">
                   <div class="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
                     <CheckCircle2 class="w-3.5 h-3.5 text-teal-500" />
-                    <span>PoC / 规则套件索引</span>
+                    <span>SAST 查询套件</span>
                   </div>
                   <span class="text-[10px] text-slate-400 bg-slate-200/60 px-1.5 py-0.5 rounded">强依赖</span>
                 </div>
                 <div class="text-[11px] text-slate-500 mt-1.5 font-mono truncate">
-                  security-extended (Go, Java, TS, Py)
+                  <router-link to="/sast/config" class="text-blue-600">查看当前生效套件</router-link>
                 </div>
               </div>
 
@@ -273,13 +273,13 @@ import {
   RotateCw,
 } from 'lucide-vue-next'
 import { api } from '@/api'
-import type { Scan, WorkerStatus, DastWorkerStatus } from '@/types'
+import type { WorkerStatus, DastWorkerStatus } from '@/types'
 
 dayjs.extend(relativeTime)
 dayjs.locale('zh-cn')
 
 const loading = ref(false)
-const scans = ref<Scan[]>([])
+const stats = ref<Awaited<ReturnType<typeof api.dashboard>>>()
 type DashboardWorker =
   | { kind: 'SAST'; status: WorkerStatus }
   | { kind: 'DAST'; status: DastWorkerStatus }
@@ -296,18 +296,6 @@ const filteredWorkers = computed(() => {
   }
   return workers.value
 })
-
-// 统计指标（真实数据，无伪数据兜底）
-const repoCount = computed(() => {
-  const set = new Set(scans.value.map((s) => s.repo_url).filter(Boolean))
-  return set.size
-})
-
-const scanCount = computed(() => {
-  return scans.value.length
-})
-
-const findingCount = ref(0)
 
 const totalWorkers = computed(() => {
   return workers.value.length
@@ -334,26 +322,15 @@ function formatLastSeen(timeStr: string | null) {
 async function fetchData() {
   loading.value = true
   try {
-    const [scanData, sastWorkers, dastWorkers] = await Promise.all([
-      api.listScans(),
-      api.listWorkers(),
-      api.listDastWorkers(),
+    await Promise.all([
+      api.dashboard().then(data => { stats.value = data }).catch(e => message.error(e.message)),
+      Promise.all([api.listWorkers(), api.listDastWorkers()]).then(([sastWorkers, dastWorkers]) => {
+        workers.value = [
+          ...sastWorkers.map((status): DashboardWorker => ({ kind: 'SAST', status })),
+          ...dastWorkers.map((status): DashboardWorker => ({ kind: 'DAST', status })),
+        ]
+      }),
     ])
-    scans.value = scanData
-    workers.value = [
-      ...sastWorkers.map((status): DashboardWorker => ({ kind: 'SAST', status })),
-      ...dastWorkers.map((status): DashboardWorker => ({ kind: 'DAST', status })),
-    ]
-
-    // 统计前几个 scan 的 findings
-    if (scanData.length > 0) {
-      const topScans = scanData.slice(0, 10)
-      const findingPromises = topScans.map((s) => api.getScanFindings(s.id))
-      const findingsList = await Promise.all(findingPromises)
-      findingCount.value = findingsList.reduce((acc, cur) => acc + cur.length, 0)
-    } else {
-      findingCount.value = 0
-    }
   } catch (e: any) {
     message.error(e.message || '加载仪表盘数据失败')
   } finally {

@@ -104,12 +104,15 @@
       cancel-text="取消"
       @ok="submitAddAsset"
     >
-      <a-form :model="newAsset" layout="vertical" class="mt-4">
-        <div class="grid grid-cols-2 gap-x-4">
-          <a-form-item v-for="field in assetFields" :key="field.key" :label="field.label" required>
-            <a-input v-model:value="newAsset[field.key]" :placeholder="field.placeholder" />
-          </a-form-item>
-        </div>
+      <a-form layout="vertical" class="mt-4">
+        <a-form-item label="IP 地址" required>
+          <a-input
+            v-model:value="assetIP"
+            placeholder="例如 192.168.1.100 或 2001:db8::1"
+            allow-clear
+            @press-enter="submitAddAsset"
+          />
+        </a-form-item>
       </a-form>
     </a-modal>
 
@@ -117,54 +120,57 @@
     <a-modal
       v-model:open="showCreate"
       title="发起 DAST 动态扫描"
-      width="640px"
+      width="600px"
       :confirm-loading="creating"
       ok-text="创建扫描"
       cancel-text="取消"
       @ok="submitCreate"
     >
-      <a-form :model="form" layout="vertical" class="mt-4">
-        <a-form-item label="请求幂等键" required>
-          <a-input v-model:value="form.request_key" placeholder="同一键重复提交返回同一批次" />
-        </a-form-item>
-        <div class="grid grid-cols-2 gap-4">
-          <a-form-item label="模板版本" required>
-            <a-input v-model:value="form.template_version" placeholder="与模板目录 catalog.json 的版本一致" />
-          </a-form-item>
-          <a-form-item label="超时时限（秒）" required>
-            <a-input-number v-model:value="form.timeout_seconds" :min="60" :max="86400" class="w-full" />
-          </a-form-item>
-          <a-form-item label="速率上限（每秒请求）" required>
-            <a-input-number v-model:value="form.rate_limit" :min="1" :max="5000" class="w-full" />
-          </a-form-item>
-          <a-form-item label="PoC 并发数" required>
-            <a-input-number v-model:value="form.concurrency" :min="1" :max="100" class="w-full" />
-          </a-form-item>
+      <a-form :model="form" layout="vertical" class="mt-4 space-y-4">
+        <div class="text-xs text-slate-500 bg-slate-50 p-2.5 rounded-lg border border-slate-200/60 leading-relaxed">
+          💡 <strong>指纹与模板自动适配</strong>：扫描器将先进行目标端口与服务指纹探测，识别开放协议与组件版本后由系统自动匹配适用的 PoC 规则进行验证。
         </div>
-        <a-form-item label="模板 ID" required>
-          <a-select
-            v-model:value="form.template_ids"
-            mode="tags"
-            placeholder="输入模板 ID 后回车，例如 http-cve-2024-0001"
+
+        <a-form-item label="探测端口">
+          <a-input
+            v-model:value="portRangeInput"
+            placeholder="默认所有端口 (1-65535)，支持如 80,443,8000-8080 或 1-65535"
+            allow-clear
           />
-        </a-form-item>
-        <a-form-item label="探测端口" required>
-          <div class="w-full">
-            <div
-              v-for="(p, idx) in form.probe_ports"
-              :key="idx"
-              class="flex items-center gap-2 mb-2"
-            >
-              <a-input-number v-model:value="p.port" :min="1" :max="65535" placeholder="端口" class="w-40" />
-              <a-select v-model:value="p.transport" class="w-32">
-                <a-select-option value="tcp">tcp</a-select-option>
-                <a-select-option value="udp">udp</a-select-option>
-              </a-select>
-              <a-button size="small" danger @click="form.probe_ports.splice(idx, 1)">删除</a-button>
-            </div>
-            <a-button size="small" @click="form.probe_ports.push({ port: 443, transport: 'tcp' })">添加端口</a-button>
+          <div class="text-[11px] text-slate-400 mt-1">
+            留空默认扫描全端口 (1-65535)，支持单端口与区间范围 (如 1-1000)，统一采用 TCP 协议探测。
           </div>
         </a-form-item>
+
+        <div class="grid grid-cols-3 gap-3">
+          <a-form-item label="速率上限 (Req/s)">
+            <a-input-number v-model:value="form.rate_limit" :min="1" :max="5000" class="w-full" placeholder="默认 1000" />
+          </a-form-item>
+          <a-form-item label="PoC 并发数">
+            <a-input-number v-model:value="form.concurrency" :min="1" :max="100" class="w-full" placeholder="默认 10" />
+          </a-form-item>
+          <a-form-item label="超时时限 (秒)">
+            <a-input-number v-model:value="form.timeout_seconds" :min="60" :max="86400" class="w-full" placeholder="默认 600" />
+          </a-form-item>
+        </div>
+
+        <a-collapse :bordered="false" class="bg-transparent -mx-4">
+          <a-collapse-panel key="advanced" header="高级选项（选填）">
+            <div class="grid grid-cols-2 gap-4">
+              <a-form-item label="模板版本">
+                <a-input v-model:value="form.template_version" placeholder="留空由系统自动匹配 Worker 版本" allow-clear />
+              </a-form-item>
+              <a-form-item label="指定模板 ID">
+                <a-select
+                  v-model:value="form.template_ids"
+                  mode="tags"
+                  placeholder="留空自动匹配全部适用规则"
+                  allow-clear
+                />
+              </a-form-item>
+            </div>
+          </a-collapse-panel>
+        </a-collapse>
       </a-form>
     </a-modal>
   </div>
@@ -187,26 +193,7 @@ const showAddAsset = ref(false)
 const addingAsset = ref(false)
 const selectedKeys = ref<string[]>([])
 
-const assetFields = [
-  { key: 'source_id', label: '来源标识', placeholder: '例如 manual' },
-  { key: 'cmdb_id', label: '资产标识', placeholder: '同一来源内唯一' },
-  { key: 'host', label: '主机地址', placeholder: 'IP 地址或域名，不含协议和端口' },
-  { key: 'cluster_id', label: '集群', placeholder: '与 DAST Worker 所属集群一致' },
-  { key: 'network_zone', label: '网络区域', placeholder: '与 DAST Worker 所属网络区域一致' },
-  { key: 'business_id', label: '业务', placeholder: '业务标识' },
-  { key: 'owner', label: '负责人', placeholder: '资产负责人' },
-] as const
-
-const newAsset = reactive<DastAsset>({
-  source_id: 'manual',
-  cmdb_id: '',
-  host: '',
-  cluster_id: '',
-  network_zone: '',
-  business_id: '',
-  owner: '',
-  registered_services: [],
-})
+const assetIP = ref('')
 
 const filter = reactive<DastAssetFilter>({
   source_id: '',
@@ -215,15 +202,43 @@ const filter = reactive<DastAssetFilter>({
   business_id: '',
 })
 
+const portRangeInput = ref('1-65535')
+
 const form = reactive({
-  request_key: '',
   template_version: '',
   template_ids: [] as string[],
-  rate_limit: 100,
+  rate_limit: 1000,
   concurrency: 10,
   timeout_seconds: 600,
-  probe_ports: [{ port: 443, transport: 'tcp' }] as DastPortSpec[],
 })
+
+function parsePortRange(raw: string): DastPortSpec[] {
+  const text = raw.trim()
+  if (!text || text.toLowerCase() === 'all' || text === '所有' || text === '全部') {
+    return Array.from({ length: 65535 }, (_, i) => ({ port: i + 1, transport: 'tcp' as const }))
+  }
+  const set = new Set<number>()
+  for (const seg of text.split(/[,，\s]+/)) {
+    if (!seg) continue
+    const parts = seg.split('-')
+    if (parts.length === 1) {
+      const p = parseInt(parts[0], 10)
+      if (p >= 1 && p <= 65535) set.add(p)
+    } else if (parts.length === 2) {
+      const start = parseInt(parts[0], 10)
+      const end = parseInt(parts[1], 10)
+      if (start >= 1 && end <= 65535 && start <= end) {
+        for (let p = start; p <= end; p++) {
+          set.add(p)
+        }
+      }
+    }
+  }
+  if (set.size === 0) {
+    return Array.from({ length: 65535 }, (_, i) => ({ port: i + 1, transport: 'tcp' as const }))
+  }
+  return Array.from(set).sort((a, b) => a - b).map((p) => ({ port: p, transport: 'tcp' as const }))
+}
 
 const columns = [
   { title: '资产 ID', dataIndex: 'cmdb_id', key: 'cmdb_id', width: 140 },
@@ -248,16 +263,14 @@ function assetKey(asset: DastAsset) {
 const selected = computed(() => assets.value.filter((a) => selectedKeys.value.includes(assetKey(a))))
 
 async function submitAddAsset() {
-  for (const field of assetFields) {
-    newAsset[field.key] = newAsset[field.key].trim()
-    if (!newAsset[field.key]) {
-      message.warning(`请填写${field.label}`)
-      return
-    }
+  const host = assetIP.value.trim()
+  if (!host) {
+    message.warning('请输入目标 IP 地址')
+    return
   }
   addingAsset.value = true
   try {
-    const asset = await api.createDastAsset(newAsset)
+    const asset = await api.createDastAsset({ host })
     Object.assign(filter, {
       source_id: asset.source_id,
       cluster_id: asset.cluster_id,
@@ -266,9 +279,7 @@ async function submitAddAsset() {
     })
     selectedKeys.value = []
     showAddAsset.value = false
-    for (const field of assetFields) {
-      newAsset[field.key] = field.key === 'source_id' ? 'manual' : ''
-    }
+    assetIP.value = ''
     message.success('资产已添加')
     await load()
   } catch (e: any) {
@@ -295,22 +306,16 @@ async function load() {
 }
 
 async function submitCreate() {
-  if (!form.request_key.trim()) {
-    message.warning('请填写请求幂等键')
+  if (selected.value.length === 0) {
+    message.warning('请至少勾选一个目标资产')
     return
   }
-  if (!form.template_version.trim() || form.template_ids.length === 0) {
-    message.warning('请填写模板版本和至少一个模板 ID')
-    return
-  }
-  if (form.probe_ports.length === 0) {
-    message.warning('请至少配置一个探测端口')
-    return
-  }
+  const ports = parsePortRange(portRangeInput.value)
+  const reqKey = `scan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   creating.value = true
   try {
     const scan = await api.createDastScan({
-      request_key: form.request_key.trim(),
+      request_key: reqKey,
       assets: selected.value.map((a) => ({ source_id: a.source_id, cmdb_id: a.cmdb_id })),
       filter: {
         source_id: filter.source_id || undefined,
@@ -321,10 +326,10 @@ async function submitCreate() {
       options: {
         template_version: form.template_version.trim(),
         template_ids: form.template_ids,
-        rate_limit: form.rate_limit,
-        concurrency: form.concurrency,
-        timeout_seconds: form.timeout_seconds,
-        probe_ports: form.probe_ports,
+        rate_limit: form.rate_limit || 1000,
+        concurrency: form.concurrency || 10,
+        timeout_seconds: form.timeout_seconds || 600,
+        probe_ports: ports,
       },
     })
     message.success(`批次 #${scan.id} 已创建，任务已进入执行队列`)
@@ -332,7 +337,7 @@ async function submitCreate() {
     selectedKeys.value = []
     router.push(`/dast/tasks/${scan.id}`)
   } catch (e: any) {
-    message.error(e.message)
+    message.error(e?.response?.data?.error || e?.message || '创建扫描失败')
   } finally {
     creating.value = false
   }

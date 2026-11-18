@@ -1,6 +1,7 @@
 package dast
 
 import (
+	"devsecops/internal/dast/domain"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -72,7 +73,7 @@ func (h *Handler) ListAssets(c *echo.Context) error {
 	if _, err := h.authenticateUser(c); err != nil {
 		return failStatus(c, http.StatusUnauthorized, err)
 	}
-	filter := AssetFilter{SourceID: c.QueryParam("source_id"), ClusterID: c.QueryParam("cluster_id"), NetworkZone: c.QueryParam("network_zone"), BusinessID: c.QueryParam("business_id")}
+	filter := domain.AssetFilter{SourceID: c.QueryParam("source_id"), ClusterID: c.QueryParam("cluster_id"), NetworkZone: c.QueryParam("network_zone"), BusinessID: c.QueryParam("business_id")}
 	result, err := h.service.ListAssets(c.Request().Context(), filter)
 	if err != nil {
 		return fail(c, err)
@@ -83,7 +84,7 @@ func (h *Handler) CreateAsset(c *echo.Context) error {
 	if _, err := h.authenticateUser(c); err != nil {
 		return failStatus(c, http.StatusUnauthorized, err)
 	}
-	var asset Asset
+	var asset domain.Asset
 	if err := h.decodeRequest(c, &asset); err != nil {
 		return fail(c, err)
 	}
@@ -99,7 +100,7 @@ func (h *Handler) CreateScan(c *echo.Context) error {
 	if err != nil {
 		return failStatus(c, http.StatusUnauthorized, err)
 	}
-	var req CreateScanRequest
+	var req domain.CreateScanRequest
 	if err := h.decodeRequest(c, &req); err != nil {
 		return fail(c, err)
 	}
@@ -119,6 +120,24 @@ func (h *Handler) ListScans(c *echo.Context) error {
 		return fail(c, err)
 	}
 	return c.JSON(200, result)
+}
+func (h *Handler) CancelScan(c *echo.Context) error {
+	user, err := h.authenticateUser(c)
+	if err != nil {
+		return failStatus(c, http.StatusUnauthorized, err)
+	}
+	id, err := parsePathID(c)
+	if err != nil {
+		return fail(c, err)
+	}
+	changed, err := h.service.CancelScan(c.Request().Context(), id, user)
+	if err != nil {
+		return failStatus(c, http.StatusInternalServerError, err)
+	}
+	if !changed {
+		return failStatus(c, http.StatusConflict, errors.New("没有可取消的任务"))
+	}
+	return c.NoContent(http.StatusNoContent)
 }
 func (h *Handler) GetScan(c *echo.Context) error {
 	user, err := h.authenticateUser(c)

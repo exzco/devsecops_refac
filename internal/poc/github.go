@@ -33,50 +33,44 @@ func (e *syncFailure) Error() string { return e.err.Error() }
 func (e *syncFailure) Unwrap() error { return e.err }
 
 type repoRecord struct {
-	ID          string `json:"id"`
-	Description string `json:"description"`
-	URL         string `json:"url"`
-	Links       []Link `json:"links"`
+	ID          string     `json:"id"`
+	Description string     `json:"description"`
+	URL         string     `json:"url"`
+	Links       []Link     `json:"links"`
+	Templates   []Evidence `json:"templates,omitempty"`
 }
 type repositorySource struct{ name, branch, format string }
+
+var nucleiRepository = repositorySource{"projectdiscovery/nuclei-templates", "main", "tree"}
 
 var repositorySources = []repositorySource{
 	{"nomi-sec/PoC-in-GitHub", "master", "json"},
 	{"trickest/cve", "main", "markdown"},
-	{"projectdiscovery/nuclei-templates", "main", "tree"},
+	nucleiRepository,
 }
 var cveInPath = regexp.MustCompile(`CVE-[0-9]{4}-[0-9]{4,}`)
 var githubLink = regexp.MustCompile(`https://github\.com/[^\s<>\)\]]+`)
 
-func (c *CVE) mergeLinks() error {
-	seen := map[string]struct{}{}
-	links := []Link{}
-	add := func(link Link) {
-		if _, ok := seen[link.URL]; !ok {
-			seen[link.URL] = struct{}{}
-			links = append(links, link)
+func (record *repoRecord) readPoCs(reader io.Reader) error {
+	var entries []struct {
+		URL         string `json:"html_url"`
+		Name        string `json:"full_name"`
+		Description string
+	}
+	if err := json.NewDecoder(reader).Decode(&entries); err != nil {
+		return &sourceError{err}
+	}
+	descriptions := []string{}
+	for _, entry := range entries {
+		if entry.URL == "" || entry.Name == "" {
+			return &sourceError{errors.New("PoC index missing repository URL/name")}
+		}
+		record.Links = append(record.Links, Link{URL: entry.URL, Title: entry.Name})
+		if entry.Description != "" {
+			descriptions = append(descriptions, entry.Description)
 		}
 	}
-	for _, link := range c.Discovered {
-		add(link)
-	}
-	names := make([]string, 0, len(c.Sources))
-	for name := range c.Sources {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		var source struct {
-			Links []Link `json:"links"`
-		}
-		if err := json.Unmarshal(c.Sources[name], &source); err != nil {
-			return err
-		}
-		for _, link := range source.Links {
-			add(link)
-		}
-	}
-	c.Discovered = links
+	record.Description = strings.Join(descriptions, "\n")
 	return nil
 }
 
@@ -104,54 +98,55 @@ func (s *Service) repository(ctx context.Context, source repositorySource, years
 			return nil, fmt.Errorf("read repository cache %s from redis: %w", cacheKey, err)
 		}
 	}
-	var records []repoRecord
-	var err error
-	if source.format == "tree" {
-		records, err = s.templateIndex(ctx, source, years)
-	} else {
-		records, err = s.archiveIndex(ctx, source, years)
-	}
+	records, err := func() ([]repoRecord, error) {
+		if source.format == "tree" {
+			records, err := s.archiveIndex(ctx, repositorySource{source.name, source.branch, "yaml"}, years)
+			if err == nil {
+				return records, nil
+			}
+			return s.templateIndex(ctx, source, years)
+		}
+		return s.archiveIndex(ctx, source, years)
+	}()
 	if err != nil {
 		return nil, err
 	}
 	if s.redis != nil {
 		var buf bytes.Buffer
 		zw := gzip.NewWriter(&buf)
-		if err := json.NewEncoder(zw).Encode(records); err != nil {
-			return nil, err
-		}
-		if err := zw.Close(); err != nil {
-			return nil, err
-		}
-		if err := s.redis.Set(ctx, cacheKey, buf.Bytes(), 6*time.Hour).Err(); err != nil {
-			return nil, fmt.Errorf("cache repository %s to redis: %w", cacheKey, err)
+		if err := json.NewEncoder(zw).Encode(records); err == nil && zw.Close() == nil {
+			_ = s.redis.Set(ctx, cacheKey, buf.Bytes(), 24*time.Hour).Err()
 		}
 	}
 	return records, nil
 }
 
 func (s *Service) archiveIndex(ctx context.Context, source repositorySource, years map[string]struct{}) ([]repoRecord, error) {
-	address := "https://codeload.github.com/" + source.name + "/tar.gz/refs/heads/" + source.branch
+	address := fmt.Sprintf("https://api.github.com/repos/%s/tarball/%s", source.name, source.branch)
 	req, err := http.NewRequestWithContext(ctx, "GET", address, nil)
 	if err != nil {
 		return nil, err
 	}
-	client := http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
+	req.Header.Set("User-Agent", "devsecops-cve")
+	if s.cfg.GitHubToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.cfg.GitHubToken)
+	}
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, &sourceError{err}
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, &sourceError{fmt.Errorf("%s HTTP %d", source.name, resp.StatusCode)}
+	if resp.StatusCode != 200 {
+		return nil, &sourceError{fmt.Errorf("download archive: HTTP %d", resp.StatusCode)}
 	}
-	compressed, err := gzip.NewReader(resp.Body)
+	gzipReader, err := gzip.NewReader(resp.Body)
 	if err != nil {
 		return nil, &sourceError{err}
 	}
-	defer compressed.Close()
-	archive := tar.NewReader(compressed)
+	defer gzipReader.Close()
+	archive := tar.NewReader(gzipReader)
 	records := []repoRecord{}
+	templates := map[string]*repoRecord{}
 	for {
 		header, err := archive.Next()
 		if errors.Is(err, io.EOF) {
@@ -160,14 +155,56 @@ func (s *Service) archiveIndex(ctx context.Context, source repositorySource, yea
 		if err != nil {
 			return nil, &sourceError{err}
 		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
 		if header.Typeflag != tar.TypeReg {
 			continue
 		}
+		if source.format == "yaml" {
+			if path.Ext(header.Name) != ".yaml" && path.Ext(header.Name) != ".yml" {
+				continue
+			}
+			ids := cveInPath.FindAllString(header.Name, -1)
+			if len(ids) == 0 {
+				continue
+			}
+			matched := false
+			for _, id := range ids {
+				if _, ok := years[strings.Split(id, "-")[1]]; ok {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+			raw, err := io.ReadAll(archive)
+			if err != nil {
+				return nil, &sourceError{err}
+			}
+			body := strings.TrimSpace(string(raw))
+			if len(body) == 0 {
+				continue
+			}
+			_, relative, ok := strings.Cut(header.Name, "/")
+			if !ok {
+				return nil, &sourceError{errors.New("repository archive path missing root")}
+			}
+			link := "https://github.com/" + source.name + "/blob/" + source.branch + "/" + relative
+			for _, id := range ids {
+				if _, ok := years[strings.Split(id, "-")[1]]; !ok {
+					continue
+				}
+				record := templates[id]
+				if record == nil {
+					record = &repoRecord{ID: id, URL: link, Description: "Nuclei CVE template: " + relative, Links: []Link{}, Templates: []Evidence{}}
+					templates[id] = record
+				}
+				record.Links = append(record.Links, Link{URL: link, Title: "Nuclei: " + relative})
+				record.Templates = append(record.Templates, Evidence{Source: link, Text: string(body)})
+			}
+			continue
+		}
 		id := strings.TrimSuffix(path.Base(header.Name), path.Ext(header.Name))
-		if !cvePattern.MatchString(id) {
+		if !ValidCVE(id) {
 			continue
 		}
 		if _, ok := years[strings.Split(id, "-")[1]]; !ok {
@@ -183,25 +220,9 @@ func (s *Service) archiveIndex(ctx context.Context, source repositorySource, yea
 			if path.Ext(header.Name) != ".json" {
 				continue
 			}
-			var repositories []struct {
-				URL         string `json:"html_url"`
-				Name        string `json:"full_name"`
-				Description string `json:"description"`
+			if err := record.readPoCs(archive); err != nil {
+				return nil, fmt.Errorf("%s: %w", relative, err)
 			}
-			if err := json.NewDecoder(archive).Decode(&repositories); err != nil {
-				return nil, &sourceError{fmt.Errorf("%s: %w", relative, err)}
-			}
-			descriptions := []string{}
-			for _, repo := range repositories {
-				if repo.URL == "" || repo.Name == "" {
-					return nil, &sourceError{fmt.Errorf("%s: missing repository URL/name", relative)}
-				}
-				record.Links = append(record.Links, Link{repo.URL, repo.Name})
-				if repo.Description != "" {
-					descriptions = append(descriptions, repo.Description)
-				}
-			}
-			record.Description = strings.Join(descriptions, "\n")
 		case "markdown":
 			if path.Ext(header.Name) != ".md" {
 				continue
@@ -219,12 +240,16 @@ func (s *Service) archiveIndex(ctx context.Context, source repositorySource, yea
 			if found {
 				pocs = strings.SplitN(pocs, "\n###", 2)[0]
 				for _, link := range githubLink.FindAllString(pocs, -1) {
-					record.Links = append(record.Links, Link{link, strings.TrimPrefix(link, "https://github.com/")})
+					record.Links = append(record.Links, Link{URL: link, Title: strings.TrimPrefix(link, "https://github.com/")})
 				}
 			}
 		}
 		records = append(records, record)
 	}
+	for _, record := range templates {
+		records = append(records, *record)
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].ID < records[j].ID })
 	return records, nil
 }
 
@@ -241,7 +266,7 @@ func (s *Service) templateIndex(ctx context.Context, source repositorySource, ye
 	}
 	byID := map[string]*repoRecord{}
 	for _, entry := range tree.Tree {
-		if entry.Type != "blob" || path.Ext(entry.Path) != ".yaml" {
+		if entry.Type != "blob" || (path.Ext(entry.Path) != ".yaml" && path.Ext(entry.Path) != ".yml") {
 			continue
 		}
 		for _, id := range cveInPath.FindAllString(entry.Path, -1) {
@@ -254,7 +279,7 @@ func (s *Service) templateIndex(ctx context.Context, source repositorySource, ye
 				record = &repoRecord{ID: id, URL: link, Description: "Nuclei CVE template: " + entry.Path, Links: []Link{}}
 				byID[id] = record
 			}
-			record.Links = append(record.Links, Link{link, "Nuclei: " + entry.Path})
+			record.Links = append(record.Links, Link{URL: link, Title: "Nuclei: " + entry.Path})
 		}
 	}
 	records := make([]repoRecord, 0, len(byID))
@@ -266,16 +291,18 @@ func (s *Service) templateIndex(ctx context.Context, source repositorySource, ye
 }
 
 func (s *Service) syncRepository(ctx context.Context, source repositorySource, years map[string]struct{}, ids map[string]struct{}, progress func(string) error) error {
-	records, err := s.repository(ctx, source, years)
+	var records []repoRecord
+	var err error
+	if source.name == nucleiRepository.name {
+		records, err = s.archiveIndex(ctx, repositorySource{source.name, source.branch, "yaml"}, years)
+	} else {
+		records, err = s.repository(ctx, source, years)
+	}
 	if err != nil {
 		return err
 	}
 	for i, record := range records {
-		raw, err := json.Marshal(record)
-		if err != nil {
-			return err
-		}
-		if err := s.ingest(ctx, record.ID, source.name, raw); err != nil {
+		if err := s.ingest(ctx, record.ID, source.name, record); err != nil {
 			return err
 		}
 		ids[record.ID] = struct{}{}
@@ -286,26 +313,4 @@ func (s *Service) syncRepository(ctx context.Context, source repositorySource, y
 		}
 	}
 	return progress(fmt.Sprintf("%s: 已导入 %d 个 CVE", source.name, len(records)))
-}
-
-func (s *Service) search(ctx context.Context, id string) error {
-	resolved, err := s.refreshCVE(ctx, id)
-	if err != nil {
-		return err
-	}
-	failures := []error{}
-	for _, notice := range resolved.Notices {
-		failures = append(failures, errors.New(notice))
-	}
-	if err := s.searchRepositories(ctx, id); err != nil {
-		var remote *sourceError
-		if !errors.As(err, &remote) {
-			return err
-		}
-		failures = append(failures, err)
-	}
-	if len(failures) > 0 {
-		return &syncFailure{1, errors.Join(failures...)}
-	}
-	return nil
 }

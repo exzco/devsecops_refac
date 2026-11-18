@@ -9,7 +9,8 @@ bin
 server
 worker-sast
 **/node_modules
-/docs/
+/docs/*.md
 worker-dast
 env_cvps1
 /script/
+.env_cvps1

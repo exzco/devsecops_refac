@@ -48,7 +48,7 @@ type SASTScanner struct {
 func NewSASTScanner(cfg SASTScanner) *SASTScanner {
 	return &SASTScanner{CodeQLPath: cfg.CodeQLPath, WorkRoot: cfg.WorkRoot, QuerySuite: cfg.QuerySuite}
 }
-func selectL(language string,querySuite string) (string, string, string, error){
+func selectL(language string) (string, string, error){
 	var codeqlLanguage, buildMode string
 
 	switch strings.ToLower(strings.TrimSpace(language)) {
@@ -69,23 +69,36 @@ func selectL(language string,querySuite string) (string, string, string, error){
 		buildMode = "none"
 
 	default:
-		return "","","", fmt.Errorf("unsupported language: %q", language)
+		return "","", fmt.Errorf("unsupported language: %q", language)
 	}
 
-	switch querySuite {
+	return codeqlLanguage, buildMode, nil
+}
+func (s *SASTScanner) queries(ctx context.Context, dir, language string, p Policy) ([]string, error) {
+	switch p.Active {
 	case "code-scanning", "security-extended":
-		// 支持的默认规则档位。
-	default:
-		return "","","", fmt.Errorf("unsupported query suite: %q", querySuite)
+		return []string{fmt.Sprintf("codeql/%s-queries:codeql-suites/%s-%s.qls", language, language, p.Active)}, nil
 	}
-
-	QuerySuite := fmt.Sprintf(
-		"codeql/%s-queries:codeql-suites/%s-%s.qls",
-		codeqlLanguage,
-		codeqlLanguage,
-		querySuite,
-	)
-	return codeqlLanguage, buildMode, QuerySuite,nil
+	selected := map[string]bool{}
+	for _, suite := range p.Suites {
+		if suite.ID == p.Active {
+			for _, id := range suite.Rules { selected[id] = true }
+		}
+	}
+	if err := os.Mkdir(dir, 0700); err != nil { return nil, err }
+	var paths []string
+	for i, rule := range p.Rules {
+		if !selected[rule.ID] || language != rule.Language { continue }
+		path := filepath.Join(dir, fmt.Sprintf("rule-%d.ql", i))
+		if err := os.WriteFile(path, []byte(rule.Code), 0600); err != nil { return nil, err }
+		paths = append(paths, path)
+	}
+	if len(paths) == 0 { return nil, fmt.Errorf("当前套件没有 %s 规则", language) }
+	manifest := fmt.Sprintf("name: devsecops/custom-%s\nversion: 0.0.1\ndependencies:\n  codeql/%s-all: '*'\n", language, language)
+	if err := os.WriteFile(filepath.Join(dir, "qlpack.yml"), []byte(manifest), 0600); err != nil { return nil, err }
+	cmd := exec.CommandContext(ctx, s.CodeQLPath, "pack", "install", dir)
+	if out, err := cmd.CombinedOutput(); err != nil { return nil, fmt.Errorf("resolve CodeQL dependencies: %w: %s", err, out) }
+	return paths, nil
 }
 func unzipSource(zipPath, destDir string) error {
 	r, err := zip.OpenReader(zipPath)
@@ -143,7 +156,7 @@ func computeFileSHA256(filePath string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil))[:12], nil
 }
 
-func (s *SASTScanner) Scan(ctx context.Context, repoURL string, language string, timeout time.Duration) (*ScanResult, error) {
+func (s *SASTScanner) Scan(ctx context.Context, repoURL string, language string, timeout time.Duration, policy Policy) (*ScanResult, error) {
 	repoURL = strings.TrimSpace(repoURL);
 	ctx, cancel := context.WithTimeout(ctx, timeout);
 	defer cancel();
@@ -170,7 +183,7 @@ func (s *SASTScanner) Scan(ctx context.Context, repoURL string, language string,
 	defer func() {
 		paths := []string{taskDir}
 		if completed {
-			paths = []string{sourceDir,dbDir}
+			paths = []string{sourceDir,dbDir,filepath.Join(taskDir, "queries")}
 		}
 		for _, path := range paths {
 			if err := os.RemoveAll(path); err != nil {
@@ -188,10 +201,12 @@ func (s *SASTScanner) Scan(ctx context.Context, repoURL string, language string,
 		commitSHA = "zip-" + time.Now().Format("20060102150405")
 	}
 
-	codeqlLanguage, buildMode, querySuite,err := selectL(language,s.QuerySuite)
+	codeqlLanguage, buildMode, err := selectL(language)
 	if err != nil {
 		return nil, fmt.Errorf("select querysuite error:%w",err)
 	}
+	queries, err := s.queries(ctx, filepath.Join(taskDir, "queries"), codeqlLanguage, policy)
+	if err != nil { return nil, err }
 	cmd := exec.CommandContext(ctx, s.CodeQLPath,"database", "create",
 	"--language="+codeqlLanguage,
 	"--build-mode="+buildMode,
@@ -203,13 +218,14 @@ func (s *SASTScanner) Scan(ctx context.Context, repoURL string, language string,
 		return nil, fmt.Errorf("create codeql database: %w\n%s",errors.Join(err, ctx.Err()), output,)
 	}
 
-	cmd = exec.CommandContext(ctx, s.CodeQLPath,
+	args := []string{
 		"database", "analyze",
 		"--sarif-add-snippets",
 		"--format=sarifv2.1.0",
 		"--output="+reportPath,
-		"--", dbDir, querySuite,
-	)
+		"--", dbDir,
+	}
+	cmd = exec.CommandContext(ctx, s.CodeQLPath, append(args, queries...)...)
 	cmd.WaitDelay = 5 * time.Second
 	output, err = cmd.CombinedOutput()
 	if err != nil {

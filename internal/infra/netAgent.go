@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type AgentConfig struct{ Protocol, BaseURL, Model, APIKey string }
@@ -48,6 +50,11 @@ func (a *NetAgent) Extract(ctx context.Context, system, input string, schema jso
 		return nil, err
 	}
 	cfg := a.Config
+	var compactSchema bytes.Buffer
+	if err := json.Compact(&compactSchema, schema); err != nil {
+		return nil, err
+	}
+	schema = compactSchema.Bytes()
 	endpoint := strings.TrimRight(cfg.BaseURL, "/")
 	var body any
 	headers := map[string]string{"Content-Type": "application/json"}
@@ -86,6 +93,10 @@ func (a *NetAgent) Extract(ctx context.Context, system, input string, schema jso
 		return nil, fmt.Errorf("AI %s returned HTTP %d", cfg.Protocol, resp.StatusCode)
 	}
 	var result struct {
+		ID string `json:"id"`
+		ResponseID string `json:"responseId"`
+		Usage json.RawMessage `json:"usage"`
+		UsageMetadata json.RawMessage `json:"usageMetadata"`
 		Choices []struct {
 			Message      struct{ Content string }
 			FinishReason string `json:"finish_reason"`
@@ -105,6 +116,7 @@ func (a *NetAgent) Extract(ctx context.Context, system, input string, schema jso
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
+	slog.InfoContext(ctx, "AI token usage", "protocol", cfg.Protocol, "model", cfg.Model, "request_id", result.ID, "response_id", result.ResponseID, "system_chars", utf8.RuneCountInString(system)+utf8.RuneCount(schema), "input_chars", utf8.RuneCountInString(input), "usage", string(result.Usage), "usage_metadata", string(result.UsageMetadata))
 	var output string
 	switch cfg.Protocol {
 	case "openai":

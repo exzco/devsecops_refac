@@ -124,7 +124,9 @@ func (s *Service) ProcessScan(c context.Context, scanID uint64, workerID string)
 		}
 	}
 
-	result, err := s.scanner.Scan(c, zipFilePath, scan.Language, scan.Timeout)
+	policy, _, err := s.store.policy(c)
+	if err != nil { return fmt.Errorf("load scan policy: %w", err) }
+	result, err := s.scanner.Scan(c, zipFilePath, scan.Language, scan.Timeout, policy)
 	if err != nil {
 		return fmt.Errorf("scan %d: %w", scan.ID, err)
 	}
@@ -138,14 +140,7 @@ func (s *Service) ProcessScan(c context.Context, scanID uint64, workerID string)
 	if parseErr != nil || closeErr != nil {
 		return fmt.Errorf("read SARIF report: %w", errors.Join(parseErr, closeErr))
 	}
-	if err := s.store.SaveFindings(c, scanID, findings); err != nil {
-		return fmt.Errorf("save findings: %w", err)
-	}
-	if _, err := s.store.SaveSastResult(c, scanID, result); err != nil {
-		return fmt.Errorf("save successful scan result: %w", err)
-	}
-
-	return nil
+	return s.store.CompleteScan(c, scanID, result, findings)
 }
 
 func (s *Service) ListScans(ctx context.Context) ([]Scan, error) {
@@ -177,20 +172,7 @@ func (s *Service) DeleteScanFindings(ctx context.Context, scanID uint64) error {
 }
 
 func (s *Service) DeleteScan(ctx context.Context, scanID uint64) error {
-	scan, err := s.store.GetByID(ctx, scanID)
-	if err != nil {
-		return fmt.Errorf("get scan %d: %w", scanID, err)
-	}
-
-	if scan.Status == ScanRunning {
-		return errors.New("cannot delete scan while it is running")
-	}
-
-	if err := s.store.DeleteScan(ctx, scanID); err != nil {
-		return fmt.Errorf("delete scan %d: %w", scanID, err)
-	}
-
-	return nil
+	return s.store.DeleteScan(ctx, scanID)
 }
 
 type WorkerEnv struct {

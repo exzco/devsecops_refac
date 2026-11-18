@@ -7,13 +7,13 @@ export interface Evidence { source: string; text: string }
 export interface Product { key: string; name: string; fingerprints: string; version_endpoints: string; evidence: Evidence[] }
 export type PoCKind = 'fingerprint' | 'vulnerability' | 'legacy'
 export interface PoCResult { kind: PoCKind; status: 'draft' | 'needs-evidence'; reason: string; missing_information: string[]; template: Record<string, unknown> | null }
-export interface Spec { version: 1 | 2; product_key: string; name: string; results: PoCResult[]; evidence: Evidence[] }
+export interface Spec { version: 1 | 2; product_key: string; name: string; mapping_command?: string; results: PoCResult[]; evidence: Evidence[] }
 export interface Generation { id: number; cve_id: string; spec: Spec; templates: Partial<Record<PoCKind, string>>; created_at: string }
-export interface GenerationContext { cve: CVE; description: string; products: Product[]; materials: Evidence[]; notices: string[] }
+export interface GenerationContext { cve: CVE; description: string; products: Product[]; materials: Evidence[]; notices: string[]; templates: Evidence[] | null }
 export interface AgentSettings { protocol: string; base_url: string; model: string; has_api_key: boolean; configuration_error: string; schema: unknown }
 export interface CatalogParams {
   q?: string
-  filter?: string
+  source?: string
   year?: string
   start?: string
   end?: string
@@ -26,13 +26,11 @@ export async function loadCatalog(params?: CatalogParams): Promise<CVE[]> {
 export function description(c: CVE): string {
   if (c.manual.description) return c.manual.description
   if (c.sources['CVEProject/cvelistV5']?.description) return c.sources['CVEProject/cvelistV5'].description
-  const nvd = c.sources.nvd
-  const english = nvd?.descriptions?.find((d: { lang: string }) => d.lang === 'en')
-  if (english) return english.value
   const advisory = Object.values(c.sources).find(s => s.description)
   return advisory?.description ?? ''
 }
 export const poc = {
+  nuclei: (id: string) => http.get<Evidence[] | null>(`/dast/pocs/${encodeURIComponent(id)}/nuclei`).then(r => r.data),
   save: async (id: string, manual: Manual) => { await http.put(`/dast/pocs/${encodeURIComponent(id)}`, manual) },
   sync: (start: string, end: string) => http.post('/dast/pocs/sync', { start, end }),
   search: (ids: string[]) => http.post('/dast/pocs/search', { ids }),

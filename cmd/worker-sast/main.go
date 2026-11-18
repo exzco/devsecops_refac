@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"devsecops/internal/config"
+	"devsecops/internal"
 	"devsecops/internal/infra"
 	"devsecops/internal/sast"
 )
@@ -43,9 +43,16 @@ func run() error {
         return fmt.Errorf("generate worker id: %w", err)
     }
 
-	cfg, err := config.LoadEnv()
+	cfg, err := internal.LoadEnv()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+	concurrency := 2
+	if value, ok := os.LookupEnv("SAST_WORKER_CONCURRENCY"); ok {
+		concurrency, err = strconv.Atoi(value)
+		if err != nil || concurrency < 1 {
+			return fmt.Errorf("SAST_WORKER_CONCURRENCY must be a positive integer")
+		}
 	}
 
 	if strings.TrimSpace(cfg.SASTScanner.WorkRoot) == "" {
@@ -88,7 +95,7 @@ func run() error {
 	worker := sast.NewWorker(workerID, service)
 
 	log.Printf("SAST worker started: workerID=%s", workerID)
-	if err := worker.Run(ctx); err != nil {
+	if err := worker.Run(ctx, concurrency); err != nil {
 		return err
 	}
 	log.Printf("SAST worker stopped: workerID=%s", workerID)

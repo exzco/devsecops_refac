@@ -7,6 +7,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -30,7 +31,7 @@ func NewWorker(id string, service *Service) *Worker {
 	return &Worker{id: strings.TrimSpace(id), service: service}
 }
 
-func (w *Worker) Run(ctx context.Context) error {
+func (w *Worker) Run(ctx context.Context, concurrency int) error {
 	if err := w.sendEnvironment(ctx); err != nil {
 		log.Printf("worker=%s send environment failed: %v", w.id, err)
 	}
@@ -42,45 +43,43 @@ func (w *Worker) Run(ctx context.Context) error {
 		return fmt.Errorf("register worker %s: %w", w.id, err)
 	}
 
-	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
-	heartbeatDone := make(chan struct{})
-	// 发送心跳的协程
-	go func() {
-		defer close(heartbeatDone)
+	var group sync.WaitGroup
+	group.Go(func() {
 		ticker := time.NewTicker(workerHeartbeatInterval)
 		defer ticker.Stop()
 
 		for {
 			select {
-			case <-heartbeatCtx.Done():
+			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if err := w.sendHeartbeat(heartbeatCtx); err != nil {
-					if heartbeatCtx.Err() != nil {
+				if err := w.sendHeartbeat(ctx); err != nil {
+					if ctx.Err() != nil {
 						return
 					}
 					log.Printf("worker=%s heartbeat failed: %v", w.id, err)
 				}
 			}
 		}
-	}()
-	// 退出时清理
-	defer func() {
-		cancelHeartbeat()
-		<-heartbeatDone
-	}()
+	})
+	for range concurrency {
+		group.Go(func() { w.consume(ctx) })
+	}
+	group.Wait()
+	return nil
+}
 
-	// worker 消费
+func (w *Worker) consume(ctx context.Context) {
 	for {
 		scanID, err := w.service.queue.Pop(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil
+				return
 			}
 			log.Printf("worker=%s pop task: %v", w.id, err)
 			select {
 			case <-ctx.Done():
-				return nil
+				return
 			case <-time.After(workerRetryDelay):
 				continue
 			}
@@ -88,13 +87,12 @@ func (w *Worker) Run(ctx context.Context) error {
 
 		if err := w.service.ProcessScan(ctx, scanID, w.id); err != nil {
 			if ctx.Err() != nil {
-				return nil
+				return
 			}
 			log.Printf("worker=%s scan=%d failed: %v", w.id, scanID, err)
 			continue
 		}
 		log.Printf("worker=%s scan=%d completed", w.id, scanID)
-
 	}
 }
 

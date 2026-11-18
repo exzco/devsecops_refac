@@ -110,8 +110,9 @@ function normalizeFinding(raw: any): Finding {
 }
 
 export const api = {
+  dashboard: () => http.get<{ repos: number; scans: number; findings: number; batches: number; ports: number; vulnerabilities: number }>('/dashboard').then(r => r.data),
   listScans: () => http.get<ScanResponse[]>('/scans').then((r) => r.data.map(normalizeScan)),
-  getScan: (id: number) => http.get<ScanResponse>(`/scans/${id}`).then((r) => normalizeScan(r.data)),
+  getScan: (id: number, signal?: AbortSignal) => http.get<ScanResponse>(`/scans/${id}`, { signal }).then((r) => normalizeScan(r.data)),
   deleteScan: (id: number) => http.delete(`/scans/${id}`),
   createScan: (payload: CreateScanPayload) => {
     if (payload.file) {
@@ -123,17 +124,18 @@ export const api = {
     }
     return http.post<ScanResponse>('/scans', payload).then((r) => normalizeScan(r.data))
   },
-  getScanFindings: (id: number) =>
-    http.get<any[]>(`/scans/${id}/findings`).then((r) => r.data.map(normalizeFinding)),
+  getScanFindings: (id: number, signal?: AbortSignal) =>
+    http.get<any[]>(`/scans/${id}/findings`, { signal }).then((r) => r.data.map(normalizeFinding)),
   listWorkers: () => http.get<WorkerStatus[]>('/workers').then((r) => r.data),
 
   // DAST
   listDastAssets: (filter: DastAssetFilter = {}) =>
     http.get<DastAsset[]>('/dast/assets', { params: filter }).then((r) => r.data),
-  createDastAsset: (asset: DastAsset) =>
+  createDastAsset: (asset: Pick<DastAsset, 'host'>) =>
     http.post<DastAsset>('/dast/assets', asset).then((r) => r.data),
   createDastScan: (payload: DastCreateScanRequest) =>
     http.post<DastScan>('/dast/scans', payload).then((r) => r.data),
+  cancelDastScan: (id: string) => http.post(`/dast/scans/${id}/cancel`),
   listDastScans: () => http.get<DastScan[]>('/dast/scans').then((r) => r.data),
   getDastScan: (id: string | number) =>
     http.get<DastScanDetail>(`/dast/scans/${id}`).then((r) => r.data),
